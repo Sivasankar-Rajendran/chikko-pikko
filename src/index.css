@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    font-family: 'Nunito', sans-serif;
+    background-color: #f0f9ff;
+  }
+  h1, h2, h3 {
+    font-family: 'Fredoka One', cursive;
+  }
+}
+
+@layer utilities {
+  .gradient-orange { background: linear-gradient(135deg, #FF8A00, #FFB347); }
+  .gradient-green  { background: linear-gradient(135deg, #28B463, #52D68A); }
+  .gradient-blue   { background: linear-gradient(135deg, #1E88E5, #64B5F6); }
+  .gradient-purple { background: linear-gradient(135deg, #8E44AD, #BB6BD9); }
+  .gradient-yellow { background: linear-gradient(135deg, #FFC107, #FFE082); }
+  .gradient-purple { background: linear-gradient(135deg, #8E44AD, #BB6BD9); }
+  .bg-brand-yellow { background-color: #FFC107; }
+
+  .island-card {
+    @apply rounded-2xl p-4 cursor-pointer transition-all duration-300 hover:scale-105 hover:shadow-xl;
+  }
+  .stat-card {
+    @apply bg-white rounded-2xl p-4 shadow-md border border-gray-100;
+  }
+  .btn-primary {
+    @apply px-6 py-3 rounded-2xl font-bold text-white transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg;
+  }
+  .sidebar-link {
+    @apply flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-200 cursor-pointer;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 10px; }
+::-webkit-scrollbar-thumb { background: #c4c4c4; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: #888; }
+
+/* Island path animation */
+@keyframes dash {
+  to { stroke-dashoffset: 0; }
+}
+.island-path { animation: dash 2s linear forwards; }
+
+/* Coin sparkle */
+@keyframes sparkle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.2); }
+}
+.coin-sparkle { animation: sparkle 1.5s ease-in-out infinite; }
