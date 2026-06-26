@@ -59,6 +59,45 @@ export default function QuizGenerator({
   const answersRef   = useRef({})
   const [ansDisplay, setAnsDisplay] = useState({})  // drives renders
 
+  const audioCtxRef = useRef(null)
+
+  function getAudioCtx() {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)()
+    }
+    return audioCtxRef.current
+  }
+
+  function playCorrect() {
+    try {
+      const ctx = getAudioCtx()
+      ;[523.25, 659.25, 783.99].forEach((freq, i) => {
+        const osc  = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.connect(gain); gain.connect(ctx.destination)
+        osc.type = 'sine'; osc.frequency.value = freq
+        const t = ctx.currentTime + i * 0.13
+        gain.gain.setValueAtTime(0.28, t)
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22)
+        osc.start(t); osc.stop(t + 0.22)
+      })
+    } catch {}
+  }
+
+  function playWrong() {
+    try {
+      const ctx  = getAudioCtx()
+      const osc  = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.connect(gain); gain.connect(ctx.destination)
+      osc.type = 'sawtooth'; osc.frequency.value = 180
+      const t = ctx.currentTime
+      gain.gain.setValueAtTime(0.25, t)
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.45)
+      osc.start(t); osc.stop(t + 0.45)
+    } catch {}
+  }
+
   const classLessons = LESSON_MAP[userClass] || {}
 
   /* ─ Kick off a difficulty ─────────────────────────────────────── */
@@ -92,6 +131,8 @@ export default function QuizGenerator({
     setShowFb(true)
     answersRef.current[questions[current].id] = opt
     setAnsDisplay({ ...answersRef.current })
+    if (opt === questions[current].answer) playCorrect()
+    else playWrong()
   }
 
   /* ─ Move to next question or finish ──────────────────────────── */
@@ -182,21 +223,21 @@ export default function QuizGenerator({
     /* ── Shared: difficulty picker block ── */
     const diffPicker = lesson ? (
       <div>
-        <p className="text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-3">Difficulty</p>
+        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Difficulty</p>
 
         {/* Lesson progress bar */}
-        <div className="bg-gray-50 rounded-2xl p-4 mb-4 border border-gray-100">
+        <div className="bg-gray-50 rounded-2xl p-5 mb-5 border border-gray-100">
           <div className="flex justify-between items-center mb-2">
-            <span className="text-xs font-bold text-gray-500">{lesson} — Progress</span>
-            <span className="text-xs font-bold text-brand-green">{getProgressPct(userClass, subject, lesson)}%</span>
+            <span className="text-sm font-bold text-gray-500">{lesson} — Progress</span>
+            <span className="text-sm font-bold text-brand-green">{getProgressPct(userClass, subject, lesson)}%</span>
           </div>
           <ProgressSteps pct={getProgressPct(userClass, subject, lesson)} />
-          <div className="flex justify-between text-[10px] text-gray-400 mt-1.5">
+          <div className="flex justify-between text-xs text-gray-400 mt-2">
             <span>Easy · 33%</span><span>Medium · 67%</span><span>Hard · 100%</span>
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-3 gap-4">
           {DIFF_META.map(d => {
             const status = getDiffStatus(userClass, subject, lesson, d.key)
             const failed = getFailedIds(userClass, subject, lesson, d.key)
@@ -206,17 +247,17 @@ export default function QuizGenerator({
 
             return (
               <button key={d.key} onClick={() => launchDiff(d.key)} disabled={locked}
-                className={`flex flex-col items-center py-5 px-2 rounded-2xl border-2 font-bold transition-all relative ${
+                className={`flex flex-col items-center py-7 px-3 rounded-2xl border-2 font-bold transition-all relative ${
                   locked    ? 'border-gray-200 bg-gray-50 text-gray-300 cursor-not-allowed'
                   : completed ? 'border-green-300 bg-green-50 text-green-600 hover:scale-[1.02] shadow-sm'
                   : 'hover:scale-[1.02] shadow-md cursor-pointer'
                 }`}
                 style={!locked && !completed ? { borderColor: d.col, background: d.light, color: d.col } : {}}>
-                <span className="text-2xl mb-1.5">
+                <span className="text-3xl mb-2">
                   {locked ? '🔒' : completed ? '✅' : d.icon}
                 </span>
-                <span className="text-sm">{d.label}</span>
-                <span className="text-[10px] mt-0.5 opacity-80">
+                <span className="text-base">{d.label}</span>
+                <span className="text-xs mt-1 opacity-80">
                   {locked    ? 'Locked'
                   : completed ? 'Complete ✓'
                   : hasRetry  ? `${failed.length} to retry`
@@ -227,7 +268,7 @@ export default function QuizGenerator({
           })}
         </div>
 
-        <p className="text-[11px] text-gray-400 text-center mt-3">
+        <p className="text-xs text-gray-400 text-center mt-4">
           🔒 Complete the previous level with 100% to unlock the next one
         </p>
       </div>
@@ -238,7 +279,7 @@ export default function QuizGenerator({
       const subjMeta = SUBJ_META.find(s => s.key === subject)
       const pct = getProgressPct(userClass, subject, lesson)
       return (
-        <div className="max-w-2xl mx-auto">
+        <div>
           {/* Breadcrumb / back */}
           <div className="flex items-center gap-2 mb-5">
             {onBack && (
@@ -247,15 +288,15 @@ export default function QuizGenerator({
                 ←
               </button>
             )}
-            <div className="flex items-center gap-2 text-sm">
+            <div className="flex items-center gap-2 text-base">
               <span style={{ color: subjMeta?.col }} className="font-bold">{subjMeta?.emoji} {subjMeta?.label}</span>
               <span className="text-gray-300">/</span>
               <span className="font-bold text-gray-700">{lesson}</span>
             </div>
             <div className="ml-auto flex items-center gap-2">
-              <span className="text-xs font-bold text-gray-400">{pct}% complete</span>
-              <div className="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                <div className="h-1.5 rounded-full transition-all"
+              <span className="text-sm font-bold text-gray-400">{pct}% complete</span>
+              <div className="w-20 h-2 bg-gray-100 rounded-full overflow-hidden">
+                <div className="h-2 rounded-full transition-all"
                   style={{ width: `${pct}%`, background: subjMeta?.col }} />
               </div>
             </div>
@@ -268,22 +309,22 @@ export default function QuizGenerator({
 
     /* ── Free-browse: full subject → lesson → difficulty flow ── */
     return (
-      <div className="max-w-2xl mx-auto">
+      <div>
 
         {/* Subject toggle */}
         <div className="mb-6">
-          <p className="text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-3">Subject</p>
-          <div className="grid grid-cols-2 gap-3">
+          <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Subject</p>
+          <div className="grid grid-cols-2 gap-4">
             {SUBJ_META.map(s => (
               <button key={s.key}
                 onClick={() => { setSubject(s.key); setLesson(null) }}
-                className={`flex items-center gap-3 p-4 rounded-2xl border-2 font-bold transition-all ${
+                className={`flex items-center gap-3 p-5 rounded-2xl border-2 font-bold transition-all text-base ${
                   subject === s.key
                     ? 'border-transparent text-white shadow-lg scale-[1.02]'
                     : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
                 }`}
                 style={subject === s.key ? { background: s.col } : {}}>
-                <span className="text-2xl">{s.emoji}</span>
+                <span className="text-3xl">{s.emoji}</span>
                 <span>{s.label}</span>
               </button>
             ))}
@@ -293,7 +334,7 @@ export default function QuizGenerator({
         {/* Lessons */}
         {subject && (
           <div className="mb-6">
-            <p className="text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-3">Lesson</p>
+            <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Lesson</p>
             <div className="space-y-2">
               {(classLessons[subject] || []).map((l, i) => {
                 const pct  = getProgressPct(userClass, subject, l)
@@ -301,21 +342,21 @@ export default function QuizGenerator({
                 const done = pct === 100
                 return (
                   <button key={l} onClick={() => setLesson(l)}
-                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl border-2 text-left transition-all ${
+                    className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl border-2 text-left transition-all ${
                       lesson === l
                         ? 'border-brand-orange bg-orange-50 shadow-sm'
                         : 'border-gray-200 bg-white hover:border-gray-300'
                     }`}>
-                    <span className="w-8 h-8 rounded-xl flex items-center justify-center text-sm font-bold text-white flex-shrink-0"
+                    <span className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold text-white flex-shrink-0"
                       style={{ background: col }}>{i + 1}</span>
                     <div className="flex-1 min-w-0">
-                      <div className="font-bold text-gray-700 text-sm">{l}</div>
+                      <div className="font-bold text-gray-700 text-base">{l}</div>
                       <div className="flex items-center gap-2 mt-1">
                         <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
                           <div className="h-1.5 rounded-full transition-all"
                             style={{ width: `${pct}%`, background: col }} />
                         </div>
-                        <span className={`text-[10px] font-bold flex-shrink-0 ${done ? 'text-green-500' : 'text-gray-400'}`}>
+                        <span className={`text-xs font-bold flex-shrink-0 ${done ? 'text-green-500' : 'text-gray-400'}`}>
                           {done ? '✓ Done' : `${pct}%`}
                         </span>
                       </div>

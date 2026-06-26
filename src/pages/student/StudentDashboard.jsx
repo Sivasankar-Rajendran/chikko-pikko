@@ -387,18 +387,6 @@ function playWaveSound() {
   } catch (_) { /* audio unavailable */ }
 }
 
-function makeWavePath(y, amp, period, totalW, offset = 0) {
-  let d = `M ${-offset},${y}`
-  let x = -offset
-  let up = true
-  while (x < totalW + period) {
-    const mid = x + period / 2
-    d += ` Q ${x + period / 4},${up ? y - amp : y + amp} ${mid},${y}`
-    x = mid
-    up = !up
-  }
-  return d
-}
 
 function IslandsTab({ userClass, quizProgress, goToQuiz }) {
   const { getProgressPct, resetLesson } = quizProgress
@@ -508,25 +496,13 @@ function IslandsTab({ userClass, quizProgress, goToQuiz }) {
         {/* Ocean scene */}
         <div className="relative px-8 py-10 overflow-x-auto"
           style={{
-            backgroundImage: "url('/ocean-bg.png')",
+            backgroundImage: "url('/ocean-bg-new.jpg')",
             backgroundSize: 'cover',
             backgroundPosition: 'center 60%',
             backgroundRepeat: 'no-repeat',
           }}>
           {/* Dark overlay for contrast */}
           <div className="absolute inset-0 bg-black/20 pointer-events-none" style={{ zIndex: 0 }} />
-          {/* SVG wave bands on top of photo */}
-          {(() => {
-            const totalW = islands.length * ISLE_W + (islands.length - 1) * CONN_W + 64
-            return (
-              <svg style={{ position:'absolute', top:0, left:0, width:totalW, height:'100%', pointerEvents:'none', zIndex:1 }}
-                xmlns="http://www.w3.org/2000/svg">
-                <path d={makeWavePath(88,  17, 320, totalW, 0)}   stroke="rgba(255,255,255,0.18)" strokeWidth="2.5" fill="none" />
-                <path d={makeWavePath(148, 13, 270, totalW, 90)}  stroke="rgba(255,255,255,0.12)" strokeWidth="2"   fill="none" />
-                <path d={makeWavePath(202, 10, 210, totalW, 40)}  stroke="rgba(255,255,255,0.08)" strokeWidth="1.5" fill="none" />
-              </svg>
-            )
-          })()}
           <div className="relative flex items-end"
             style={{ minWidth: `${islands.length * ISLE_W + (islands.length - 1) * CONN_W}px`, gap: 0, zIndex: 2 }}>
 
@@ -953,7 +929,7 @@ export default function StudentDashboard() {
                 </div>
               )}
             </div>
-            <div className="p-4">
+            <div className="p-6">
               <QuizGenerator
                 key={`quiz_${quizKey}`}
                 userClass={userClassNum}
