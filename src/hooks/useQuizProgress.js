@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { getProgressFS, saveProgressFS } from '../services/firestore'
 
-const STORAGE_KEY = 'chikko_quiz_v1'
+const STORAGE_KEY_PREFIX = 'chikko_quiz_v1'
 const DIFFS = ['easy', 'medium', 'hard']
 
 const defaultLesson = () => ({
@@ -9,19 +10,60 @@ const defaultLesson = () => ({
   hard:   { status: 'locked',   failedIds: [] },
 })
 
-function load() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') }
-  catch { return {} }
+function storageKey(userId) { return userId ? `${STORAGE_KEY_PREFIX}_${userId}` : STORAGE_KEY_PREFIX }
+
+function load(userId) {
+  try {
+    const key   = storageKey(userId)
+    const saved = localStorage.getItem(key)
+    if (saved) return JSON.parse(saved)
+    // Migrate legacy (un-keyed) data once
+    if (userId) {
+      const legacy = localStorage.getItem(STORAGE_KEY_PREFIX)
+      if (legacy) {
+        const parsed = JSON.parse(legacy)
+        localStorage.setItem(key, JSON.stringify(parsed))
+        localStorage.removeItem(STORAGE_KEY_PREFIX)
+        return parsed
+      }
+    }
+    return {}
+  } catch { return {} }
 }
 
-function persist(d) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(d))
+function persist(d, userId) {
+  localStorage.setItem(storageKey(userId), JSON.stringify(d))
 }
 
 function lk(cls, subj, les) { return `${cls}__${subj}__${les}` }
 
-export function useQuizProgress() {
-  const [data, setData] = useState(load)
+export function useQuizProgress(userId) {
+  const [data, setData] = useState(() => load(userId))
+  const syncTimer = useRef(null)
+
+  // On mount: pull Firestore and merge (handles cross-device sync)
+  useEffect(() => {
+    if (!userId) return
+    getProgressFS(userId)
+      .then(fsData => {
+        if (Object.keys(fsData).length === 0) return
+        setData(prev => {
+          const merged = { ...prev, ...fsData }
+          persist(merged, userId)
+          return merged
+        })
+      })
+      .catch(() => {}) // offline — keep localStorage data
+  }, [userId])
+
+  // Debounced Firestore write so rapid quiz answers don't spam writes
+  const pushToFirestore = useCallback((snapshot) => {
+    if (!userId) return
+    clearTimeout(syncTimer.current)
+    syncTimer.current = setTimeout(() => {
+      saveProgressFS(userId, snapshot).catch(() => {})
+    }, 1500)
+  }, [userId])
 
   const getLesson = useCallback((cls, subj, les) =>
     data[lk(cls, subj, les)] || defaultLesson()
@@ -35,49 +77,49 @@ export function useQuizProgress() {
     getLesson(cls, subj, les)[d]?.failedIds || []
   , [getLesson])
 
-  // 0 done=0%, 1 done=33%, 2 done=67%, 3 done=100%
   const getProgressPct = useCallback((cls, subj, les) => {
-    const lp = getLesson(cls, subj, les)
+    const lp   = getLesson(cls, subj, les)
     const done = DIFFS.filter(d => lp[d]?.status === 'completed').length
     return Math.round((done / DIFFS.length) * 100)
   }, [getLesson])
 
   const setDiffState = useCallback((cls, subj, les, d, updates) => {
     setData(prev => {
-      const k = lk(cls, subj, les)
-      const cur = prev[k] || defaultLesson()
+      const k    = lk(cls, subj, les)
+      const cur  = prev[k] || defaultLesson()
       const next = { ...prev, [k]: { ...cur, [d]: { ...cur[d], ...updates } } }
-      persist(next)
+      persist(next, userId)
+      pushToFirestore(next)
       return next
     })
-  }, [])
+  }, [userId, pushToFirestore])
 
-  // Mark difficulty complete and unlock the next one
   const completeDiff = useCallback((cls, subj, les, d) => {
     const nextD = DIFFS[DIFFS.indexOf(d) + 1]
     setData(prev => {
-      const k = lk(cls, subj, les)
-      const cur = prev[k] || defaultLesson()
+      const k       = lk(cls, subj, les)
+      const cur     = prev[k] || defaultLesson()
       const updated = {
         ...cur,
         [d]: { status: 'completed', failedIds: [] },
         ...(nextD ? { [nextD]: { ...cur[nextD], status: 'unlocked', failedIds: [] } } : {}),
       }
       const next = { ...prev, [k]: updated }
-      persist(next)
+      persist(next, userId)
+      pushToFirestore(next)
       return next
     })
-  }, [])
+  }, [userId, pushToFirestore])
 
-  // Reset a lesson completely (for testing/dev)
   const resetLesson = useCallback((cls, subj, les) => {
     setData(prev => {
       const next = { ...prev }
       delete next[lk(cls, subj, les)]
-      persist(next)
+      persist(next, userId)
+      pushToFirestore(next)
       return next
     })
-  }, [])
+  }, [userId, pushToFirestore])
 
   return { getLesson, getDiffStatus, getFailedIds, getProgressPct, setDiffState, completeDiff, resetLesson }
 }

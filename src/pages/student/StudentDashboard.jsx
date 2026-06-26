@@ -137,10 +137,10 @@ function HomeTab({ user, coins, setTab, userClass, getProgressPct }) {
       {/* Stat strip */}
       <div className="grid grid-cols-4 gap-3">
         {[
-          { icon: '🔥', value: user.streak, sub: 'Day Streak',    bg: 'bg-orange-50',  border: 'border-orange-100', val: 'text-brand-orange' },
-          { icon: '🏆', value: user.points.toLocaleString(), sub: 'Points', bg: 'bg-yellow-50', border: 'border-yellow-100', val: 'text-yellow-600' },
-          { icon: '🌳', value: `Level ${user.level}`, sub: 'Garden Level',  bg: 'bg-green-50',  border: 'border-green-100',  val: 'text-brand-green'  },
-          { icon: '🏅', value: user.badges, sub: 'Badges',       bg: 'bg-blue-50',   border: 'border-blue-100',   val: 'text-brand-blue'   },
+          { icon: '🔥', value: user.streak,               sub: 'Day Streak',   bg: 'bg-orange-50', border: 'border-orange-100', val: 'text-brand-orange' },
+          { icon: '🪙', value: coins.toLocaleString(),  sub: 'Total Coins',  bg: 'bg-yellow-50', border: 'border-yellow-100', val: 'text-yellow-600'   },
+          { icon: '🌳', value: `Level ${user.level}`,   sub: 'Garden Level', bg: 'bg-green-50',  border: 'border-green-100',  val: 'text-brand-green'  },
+          { icon: '🏅', value: user.badges,              sub: 'Badges',       bg: 'bg-blue-50',   border: 'border-blue-100',   val: 'text-brand-blue'   },
         ].map((s, i) => (
           <div key={i} className={`${s.bg} border ${s.border} rounded-2xl px-4 py-3 flex items-center gap-3`}>
             <span className="text-3xl">{s.icon}</span>
@@ -851,16 +851,17 @@ export default function StudentDashboard() {
   const navigate = useNavigate()
   const [tab,       setTab]       = useState('Home')
   const [coins,     setCoins]     = useState(user.coins)
-  const [quizConfig,     setQuizConfig]     = useState(null)   // { subject, lesson } | null
+  const [coinFlash, setCoinFlash] = useState({ amount: 0, key: 0 })
+  const [quizConfig,     setQuizConfig]     = useState(null)
   const [quizKey,        setQuizKey]        = useState(0)
-  const [quizHeaderInfo, setQuizHeaderInfo] = useState(null)  // { diff, quizMode, current, total }
+  const [quizHeaderInfo, setQuizHeaderInfo] = useState(null)
   const quizBackFn = React.useRef(null)
 
   const handleLogout   = () => { logout(); navigate('/') }
   const handlePurchase = (p) => setCoins(c => c - p)
 
   const userClassNum = parseInt((user.class || '5').toString().replace(/\D/g, '')) || 5
-  const quizProgress = useQuizProgress()
+  const quizProgress = useQuizProgress(user.id)
 
   // Navigate from island "Continue/Start" → Quiz tab with pre-selected lesson
   function goToQuiz(subject, lesson) {
@@ -914,6 +915,25 @@ export default function StudentDashboard() {
                       : 'Test yourself on any topic at any difficulty'}
                   </p>
                 </div>
+                {/* Live coin balance with flash animation */}
+                <div className="relative flex-shrink-0">
+                  <div className="flex items-center gap-1.5 bg-yellow-50 border border-yellow-200 rounded-xl px-3 py-1.5">
+                    <span className="text-base leading-none">🪙</span>
+                    <span
+                      key={coins}
+                      className="font-display text-base text-yellow-600 tabular-nums coin-pop">
+                      {coins.toLocaleString()}
+                    </span>
+                  </div>
+                  {coinFlash.amount > 0 && (
+                    <span
+                      key={coinFlash.key}
+                      className="coin-flash-anim absolute left-1/2 text-sm font-bold text-yellow-500"
+                      style={{ top: '-26px', whiteSpace: 'nowrap', pointerEvents: 'none' }}>
+                      +{coinFlash.amount} 🪙
+                    </span>
+                  )}
+                </div>
                 {/* Question counter */}
                 {quizHeaderInfo && (
                   <span className="text-sm font-bold text-gray-500 flex-shrink-0">
@@ -939,6 +959,14 @@ export default function StudentDashboard() {
                 lockToLesson={!!quizConfig}
                 onBack={() => { setQuizHeaderInfo(null); setQuizConfig(null); setTab('My Learning') }}
                 onHeaderChange={setQuizHeaderInfo}
+                onCoinsEarned={(n) => {
+                  if (n > 0) {
+                    setCoins(prev => prev + n)
+                    const key = Date.now()
+                    setCoinFlash({ amount: n, key })
+                    setTimeout(() => setCoinFlash(f => f.key === key ? { amount: 0, key: 0 } : f), 1900)
+                  }
+                }}
                 backFnRef={quizBackFn}
               />
             </div>

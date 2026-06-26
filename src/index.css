@@ -53,3 +53,20 @@
   50% { opacity: 0.6; transform: scale(1.2); }
 }
 .coin-sparkle { animation: sparkle 1.5s ease-in-out infinite; }
+
+/* Coin earned flash — floats up and fades */
+@keyframes coinFloat {
+  0%   { opacity: 0; transform: translateX(-50%) translateY(4px) scale(0.8); }
+  18%  { opacity: 1; transform: translateX(-50%) translateY(-4px) scale(1.1); }
+  75%  { opacity: 1; transform: translateX(-50%) translateY(-22px) scale(1); }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-30px) scale(0.9); }
+}
+.coin-flash-anim { animation: coinFloat 1.8s ease-out forwards; }
+
+/* Coin counter pop when value changes */
+@keyframes coinPop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.25); color: #f59e0b; }
+  100% { transform: scale(1); }
+}
+.coin-pop { animation: coinPop 0.4s ease-out forwards; }

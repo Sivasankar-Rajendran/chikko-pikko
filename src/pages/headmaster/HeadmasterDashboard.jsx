@@ -4,8 +4,14 @@ import ExcelJS from 'exceljs'
 import { useAuth } from '../../context/AuthContext'
 import {
   SCHOOL, CLASS_LIST, ALL_STAFF, ALL_STUDENTS,
-  getClassAssignments, saveClassAssignments,
+  DEFAULT_CLASS_ASSIGNMENTS,
 } from '../../data/mockData'
+import {
+  getAllStudentsFS, getAllStaffFS, getClassAssignmentsFS,
+  saveClassAssignmentsFS, saveStudentFS, updateStudentFS,
+  deleteStudentFS, saveStaffFS, deleteStaffFS,
+  seedDatabase, isSeeded, deleteAllStudentsFS, deleteAllStaffFS,
+} from '../../services/firestore'
 
 /* ── Custom dropdown (preserves app font in option list) ─── */
 function CustomSelect({ value, onChange, options, disabled, tight }) {
@@ -51,11 +57,11 @@ function CustomSelect({ value, onChange, options, disabled, tight }) {
 }
 
 /* ── Teacher-picker modal ────────────────────────────────── */
-function AssignModal({ cls, currentTeacherId, assignments, onSave, onClose }) {
+function AssignModal({ cls, currentTeacherId, assignments, staffList, onSave, onClose }) {
   const [selected, setSelected] = useState(currentTeacherId || '')
 
   // teacher → [classes] (supports multiple classes per teacher)
-  const assignedClassesMap = ALL_STAFF.reduce((acc, s) => {
+  const assignedClassesMap = staffList.reduce((acc, s) => {
     acc[s.id] = Object.entries(assignments)
       .filter(([, tid]) => tid === s.id)
       .map(([c]) => c)
@@ -93,7 +99,7 @@ function AssignModal({ cls, currentTeacherId, assignments, onSave, onClose }) {
             </div>
           </label>
 
-          {ALL_STAFF.map(s => {
+          {staffList.map(s => {
             const otherClasses = assignedClassesMap[s.id].filter(c => c !== cls)
             const isCurrent    = s.id === currentTeacherId
             const isChosen     = selected === s.id
@@ -471,24 +477,65 @@ function EditStaffModal({ staff, onSave, onClose, existingEmis }) {
 export default function HeadmasterDashboard() {
   // ── all hooks first ──
   const { user, logout } = useAuth()
-  const [assignments,     setAssignments]     = useState(getClassAssignments)
+  const [assignments,     setAssignments]     = useState(DEFAULT_CLASS_ASSIGNMENTS)
   const [modalClass,      setModalClass]      = useState(null)
   const [savedMsg,        setSavedMsg]        = useState('')
   const [showAssignments, setShowAssignments] = useState(true)
   const [showStaff,       setShowStaff]       = useState(true)
   const [showStudents,    setShowStudents]    = useState(true)
   const [staffSort,       setStaffSort]       = useState('unassigned-first')
-  const [staffList,       setStaffList]       = useState(ALL_STAFF)
+  const [staffList,       setStaffList]       = useState([])
   const [editingStaff,    setEditingStaff]    = useState(null)
   const [deleteStaffConfirm, setDeleteStaffConfirm] = useState(null)
-  const [students,        setStudents]        = useState(ALL_STUDENTS)
+  const [students,        setStudents]        = useState([])
   const [editingStudent,  setEditingStudent]  = useState(null)
   const [classFilter,     setClassFilter]     = useState('All')
   const [sectionFilter,   setSectionFilter]   = useState('All')
   const [studentSearch,   setStudentSearch]   = useState('')
   const [deleteConfirm,   setDeleteConfirm]   = useState(null)
   const [uploadResults,   setUploadResults]   = useState(null)
+  const [dbLoading,       setDbLoading]       = useState(true)
+  const [seeding,         setSeeding]         = useState(false)
   const uploadRef = useRef()
+
+  // Load all data from Firestore on mount
+  useEffect(() => {
+    async function loadAll() {
+      setDbLoading(true)
+      try {
+        const seeded = await isSeeded()
+        if (!seeded) {
+          // First run — auto-seed Firestore from mockData
+          setSeeding(true)
+          await seedDatabase(DEFAULT_CLASS_ASSIGNMENTS)
+          setSeeding(false)
+        }
+        const [fsStudents, fsStaff, fsAssignments] = await Promise.all([
+          getAllStudentsFS(),
+          getAllStaffFS(),
+          getClassAssignmentsFS(),
+        ])
+        // If local arrays are empty but Firestore still has old seeded data, clear it
+        const clearOps = []
+        if (ALL_STUDENTS.length === 0 && fsStudents.length > 0) clearOps.push(deleteAllStudentsFS())
+        if (ALL_STAFF.length   === 0 && fsStaff.length   > 0) clearOps.push(deleteAllStaffFS())
+        if (clearOps.length) await Promise.all(clearOps)
+
+        setStudents(ALL_STUDENTS.length === 0 && fsStudents.length > 0 ? [] : (fsStudents.length ? fsStudents : []))
+        setStaffList(ALL_STAFF.length   === 0 && fsStaff.length   > 0 ? [] : (fsStaff.length   ? fsStaff   : []))
+        setStaffList(fsStaff.length ? fsStaff : ALL_STAFF)
+        setAssignments(fsAssignments || DEFAULT_CLASS_ASSIGNMENTS)
+      } catch (err) {
+        console.error('Firestore load failed, using local data', err)
+        setStudents(ALL_STUDENTS)
+        setStaffList(ALL_STAFF)
+        setAssignments(DEFAULT_CLASS_ASSIGNMENTS)
+      } finally {
+        setDbLoading(false)
+      }
+    }
+    loadAll()
+  }, [])
 
   // ── derived values ──
   const staffById = Object.fromEntries(staffList.map(s => [s.id, s]))
@@ -563,6 +610,7 @@ export default function HeadmasterDashboard() {
       const exists = prev.find(s => s.id === updated.id)
       return exists ? prev.map(s => s.id === updated.id ? updated : s) : [...prev, updated]
     })
+    saveStudentFS(updated).catch(console.error)
     setEditingStudent(null)
   }
 
@@ -702,6 +750,7 @@ export default function HeadmasterDashboard() {
 
   function handleStudentDelete(id) {
     setStudents(prev => prev.filter(s => s.id !== id))
+    deleteStudentFS(id).catch(console.error)
     setDeleteConfirm(null)
   }
 
@@ -710,6 +759,7 @@ export default function HeadmasterDashboard() {
       const exists = prev.find(s => s.id === updated.id)
       return exists ? prev.map(s => s.id === updated.id ? updated : s) : [...prev, updated]
     })
+    saveStaffFS(updated).catch(console.error)
     setEditingStaff(null)
   }
 
@@ -718,7 +768,8 @@ export default function HeadmasterDashboard() {
     const updated = { ...assignments }
     Object.keys(updated).forEach(k => { if (updated[k] === id) delete updated[k] })
     setAssignments(updated)
-    saveClassAssignments(updated)
+    saveClassAssignmentsFS(updated).catch(console.error)
+    deleteStaffFS(id).catch(console.error)
     setDeleteStaffConfirm(null)
   }
 
@@ -759,10 +810,26 @@ export default function HeadmasterDashboard() {
     if (teacherId) updated[cls] = teacherId
     else           delete updated[cls]
     setAssignments(updated)
-    saveClassAssignments(updated)
+    saveClassAssignmentsFS(updated).catch(console.error)
     const teacher = teacherId ? staffById[teacherId]?.name : null
     setSavedMsg(teacher ? `Std ${cls} → ${teacher}` : `Std ${cls} unassigned`)
     setTimeout(() => setSavedMsg(''), 3000)
+  }
+
+  if (dbLoading || seeding) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-4xl mb-4 animate-bounce">🏫</div>
+          <div className="font-display text-xl text-gray-700 mb-2">
+            {seeding ? 'Setting up database…' : 'Loading school data…'}
+          </div>
+          <div className="text-sm text-gray-400">
+            {seeding ? 'Uploading staff and student records to Firebase' : 'Fetching from Firebase'}
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -1196,6 +1263,7 @@ export default function HeadmasterDashboard() {
           cls={modalClass}
           currentTeacherId={getAssignment(modalClass)}
           assignments={assignments}
+          staffList={staffList}
           onSave={handleSave}
           onClose={() => setModalClass(null)}
         />

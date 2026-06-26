@@ -2,6 +2,15 @@ import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 
+function Spinner() {
+  return (
+    <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+    </svg>
+  )
+}
+
 const STUDENT_PORTAL = {
   role: 'student',
   label: 'Student',
@@ -59,12 +68,95 @@ const STAFF_PORTALS = [
   },
 ]
 
+/* Teacher login — Staff EMIS + DOB */
+function TeacherLoginModal({ portal, onClose }) {
+  const { loginStaff } = useAuth()
+  const navigate = useNavigate()
+  const [emis,    setEmis]    = useState('')
+  const [dob,     setDob]     = useState('')
+  const [error,   setError]   = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (!emis.trim()) { setError('Please enter your Staff EMIS number.'); return }
+    if (!dob)         { setError('Please select your date of birth.'); return }
+    setLoading(true)
+    setError('')
+    const result = await loginStaff(emis.trim(), dob)
+    if (result.success) {
+      navigate('/teacher')
+    } else {
+      setError(result.error)
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className={`bg-white rounded-3xl shadow-2xl w-full max-w-sm border-4 ${portal.border} overflow-hidden`}>
+        <div className={`bg-gradient-to-r ${portal.color} p-6 text-center`}>
+          <div className="text-5xl mb-2">{portal.icon}</div>
+          <h2 className="text-2xl font-display text-white">{portal.label} Login</h2>
+        </div>
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div>
+            <label className="block text-sm font-bold text-gray-700 mb-1.5">
+              Staff EMIS Number
+            </label>
+            <div className="relative">
+              <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-lg">🆔</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={10}
+                value={emis}
+                onChange={e => { setEmis(e.target.value.replace(/\D/g, '')); setError('') }}
+                placeholder="e.g. 2100000005"
+                autoFocus
+                className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-gray-200 focus:outline-none focus:border-green-400 font-bold text-gray-700 tracking-wider placeholder:font-normal placeholder:tracking-normal"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-bold text-gray-700 mb-1.5">Date of Birth</label>
+            <div className="relative">
+              <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-lg">🎂</span>
+              <input
+                type="date"
+                value={dob}
+                onChange={e => { setDob(e.target.value); setError('') }}
+                max={new Date().toISOString().split('T')[0]}
+                className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-gray-200 focus:outline-none focus:border-green-400 font-semibold text-gray-700"
+              />
+            </div>
+          </div>
+          {error && (
+            <div className="flex items-start gap-2 text-red-600 text-sm bg-red-50 border border-red-200 rounded-xl px-4 py-3 font-semibold">
+              <span className="flex-shrink-0">⚠️</span><span>{error}</span>
+            </div>
+          )}
+          <button type="submit" disabled={loading || !emis || !dob}
+            className={`w-full py-3 rounded-2xl text-white font-bold text-lg ${portal.btnColor} hover:opacity-90 transition-all hover:scale-105 active:scale-95 shadow-lg disabled:opacity-50 disabled:scale-100`}>
+            {loading ? <span className="flex items-center justify-center gap-2"><Spinner/>Checking...</span> : `Login as ${portal.label}`}
+          </button>
+          <button type="button" onClick={onClose}
+            className="w-full py-2 rounded-xl text-gray-500 font-semibold hover:bg-gray-100 transition-all">
+            Cancel
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+/* HM / District / State login — password based */
 function LoginModal({ portal, onClose }) {
   const { login } = useAuth()
-  const navigate = useNavigate()
+  const navigate  = useNavigate()
   const [password, setPassword] = useState('')
-  const [error, setError]       = useState('')
-  const [loading, setLoading]   = useState(false)
+  const [error,    setError]    = useState('')
+  const [loading,  setLoading]  = useState(false)
 
   const handleSubmit = (e) => {
     e.preventDefault()
@@ -85,33 +177,15 @@ function LoginModal({ portal, onClose }) {
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className={`bg-white rounded-3xl shadow-2xl w-full max-w-sm border-4 ${portal.border} overflow-hidden`}>
         <div className={`bg-gradient-to-r ${portal.color} p-6 text-center`}>
-          <div className="text-5xl mb-2">{portal.icon || portal.mascot}</div>
+          <div className="text-5xl mb-2">{portal.icon}</div>
           <h2 className="text-2xl font-display text-white">{portal.label} Login</h2>
         </div>
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div>
-            <label className="block text-sm font-bold text-gray-600 mb-1">Username / ID</label>
-            <input
-              type="text"
-              defaultValue={
-                portal.role === 'student'    ? 'karthik.r'
-                : portal.role === 'teacher' ? 'revathi.t'
-                : portal.role + '_admin'
-              }
-              readOnly
-              className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 bg-gray-50 text-gray-500 font-semibold"
-            />
-          </div>
-          <div>
             <label className="block text-sm font-bold text-gray-600 mb-1">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={`Hint: ${portal.hint}`}
-              className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:outline-none focus:border-blue-400 font-semibold"
-              autoFocus
-            />
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+              placeholder={`Hint: ${portal.hint}`} autoFocus
+              className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:outline-none focus:border-blue-400 font-semibold" />
           </div>
           {error && (
             <div className="text-red-500 text-sm bg-red-50 rounded-xl px-4 py-2 font-semibold">{error}</div>
@@ -248,10 +322,11 @@ export default function Landing() {
       <main className="relative max-w-md mx-auto px-4 py-8">
         <div className="bg-white rounded-3xl shadow-xl border-4 border-orange-300 overflow-hidden">
           <div className="bg-gradient-to-r from-orange-400 to-yellow-400 px-6 py-5 text-center">
-            <p className="text-white font-bold text-lg">Ready to learn today? 🚀</p>
-            <p className="text-white/80 text-sm">Enter your details and start your adventure!</p>
+            <div className="text-4xl mb-1">🐿️🐦</div>
+            <p className="text-white font-bold text-lg">Student Login</p>
+            <p className="text-white/80 text-sm">Enter your EMIS number and date of birth</p>
           </div>
-          <StudentLoginForm portal={STUDENT_PORTAL} />
+          <StudentLoginForm />
         </div>
 
         {/* Stats */}
@@ -285,56 +360,104 @@ export default function Landing() {
         />
       )}
 
-      {/* Login modal */}
+      {/* Login modal — teacher uses EMIS+DOB, others use password */}
       {activePortal && (
-        <LoginModal portal={activePortal} onClose={() => setActivePortal(null)} />
+        activePortal.role === 'teacher'
+          ? <TeacherLoginModal portal={activePortal} onClose={() => setActivePortal(null)} />
+          : <LoginModal        portal={activePortal} onClose={() => setActivePortal(null)} />
       )}
     </div>
   )
 }
 
-function StudentLoginForm({ portal }) {
-  const { login } = useAuth()
-  const navigate  = useNavigate()
-  const [password, setPassword] = useState('')
-  const [error, setError]       = useState('')
-  const [loading, setLoading]   = useState(false)
+function StudentLoginForm() {
+  const { loginStudent } = useAuth()
+  const navigate = useNavigate()
+  const [emis,    setEmis]    = useState('')
+  const [dob,     setDob]     = useState('')
+  const [error,   setError]   = useState('')
+  const [loading, setLoading] = useState(false)
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
+    if (!emis.trim()) { setError('Please enter your EMIS number.'); return }
+    if (!dob)         { setError('Please select your date of birth.'); return }
     setLoading(true)
     setError('')
-    setTimeout(() => {
-      const result = login(portal.role, password)
-      if (result.success) {
-        navigate(`/${portal.role}`)
-      } else {
-        setError('Wrong password. Hint: ' + portal.hint)
-        setLoading(false)
-      }
-    }, 600)
+    const result = await loginStudent(emis.trim(), dob)
+    if (result.success) {
+      navigate('/student')
+    } else {
+      setError(result.error)
+      setLoading(false)
+    }
   }
 
   return (
     <form onSubmit={handleSubmit} className="p-6 space-y-4">
+      {/* EMIS */}
       <div>
-        <label className="block text-sm font-bold text-gray-600 mb-1">Student ID / Username</label>
-        <input type="text" defaultValue="karthik.r" readOnly
-          className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 bg-gray-50 text-gray-500 font-semibold" />
+        <label className="block text-sm font-bold text-gray-700 mb-1.5">
+          Student EMIS Number
+          <span className="ml-2 text-[10px] font-semibold text-gray-400 normal-case">
+            (10-digit school ID)
+          </span>
+        </label>
+        <div className="relative">
+          <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-lg">🆔</span>
+          <input
+            type="text"
+            inputMode="numeric"
+            maxLength={10}
+            value={emis}
+            onChange={e => { setEmis(e.target.value.replace(/\D/g, '')); setError('') }}
+            placeholder="e.g. 1234567801"
+            autoFocus
+            className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-gray-200 focus:outline-none focus:border-orange-400 font-bold text-gray-700 tracking-wider placeholder:font-normal placeholder:tracking-normal"
+          />
+        </div>
       </div>
+
+      {/* DOB */}
       <div>
-        <label className="block text-sm font-bold text-gray-600 mb-1">Password</label>
-        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-          placeholder={`Hint: ${portal.hint}`} autoFocus
-          className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:outline-none focus:border-orange-400 font-semibold" />
+        <label className="block text-sm font-bold text-gray-700 mb-1.5">
+          Date of Birth
+        </label>
+        <div className="relative">
+          <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-lg">🎂</span>
+          <input
+            type="date"
+            value={dob}
+            onChange={e => { setDob(e.target.value); setError('') }}
+            max={new Date().toISOString().split('T')[0]}
+            className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-gray-200 focus:outline-none focus:border-orange-400 font-semibold text-gray-700"
+          />
+        </div>
       </div>
+
       {error && (
-        <div className="text-red-500 text-sm bg-red-50 rounded-xl px-4 py-2 font-semibold">{error}</div>
+        <div className="flex items-start gap-2 text-red-600 text-sm bg-red-50 border border-red-200 rounded-xl px-4 py-3 font-semibold">
+          <span className="flex-shrink-0 mt-0.5">⚠️</span>
+          <span>{error}</span>
+        </div>
       )}
-      <button type="submit" disabled={loading}
-        className="w-full py-3.5 rounded-2xl text-white font-bold text-lg bg-brand-orange hover:opacity-90 transition-all hover:scale-105 active:scale-95 shadow-lg disabled:opacity-60">
-        {loading ? '✨ Logging in...' : "Let's Go! 🚀"}
+
+      <button type="submit" disabled={loading || !emis || !dob}
+        className="w-full py-3.5 rounded-2xl text-white font-bold text-lg bg-brand-orange hover:opacity-90 transition-all hover:scale-105 active:scale-95 shadow-lg disabled:opacity-50 disabled:scale-100">
+        {loading ? (
+          <span className="flex items-center justify-center gap-2">
+            <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+            </svg>
+            Checking...
+          </span>
+        ) : "Let's Go! 🚀"}
       </button>
+
+      <p className="text-center text-[11px] text-gray-400 font-semibold">
+        Ask your teacher if you don't know your EMIS number
+      </p>
     </form>
   )
 }

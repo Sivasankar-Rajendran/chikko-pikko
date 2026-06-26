@@ -36,8 +36,9 @@ export default function QuizGenerator({
   quizProgress,
   lockToLesson   = false,
   onBack         = null,
-  onHeaderChange = null,  // (info | null) => void  – lifts quiz phase info to parent header
-  backFnRef      = null,  // ref exposed so parent back-button can call backToSelect
+  onHeaderChange = null,
+  onCoinsEarned  = null,  // (amount: number) => void — 0 for retry, >0 for first-try correct answers
+  backFnRef      = null,
 }) {
   const { getDiffStatus, getFailedIds, getProgressPct, setDiffState, completeDiff } = quizProgress
 
@@ -48,6 +49,7 @@ export default function QuizGenerator({
   /* ─ Quiz state ───────────────────────────────────────────── */
   const [phase,      setPhase]      = useState('select')  // select | quiz | result
   const [quizMode,   setQuizMode]   = useState('full')    // full | retry
+  const [isReplay,   setIsReplay]   = useState(false)     // true when re-doing an already-completed diff
   const [diff,       setDiff]       = useState(null)
   const [questions,  setQuestions]  = useState([])
   const [current,    setCurrent]    = useState(0)
@@ -114,6 +116,7 @@ export default function QuizGenerator({
     answersRef.current = {}
     setAnsDisplay({})
     setDiff(d)
+    setIsReplay(status === 'completed')   // replay = already completed, no coins
     setQuizMode(mode)
     setQuestions(pool)
     setCurrent(0)
@@ -131,8 +134,13 @@ export default function QuizGenerator({
     setShowFb(true)
     answersRef.current[questions[current].id] = opt
     setAnsDisplay({ ...answersRef.current })
-    if (opt === questions[current].answer) playCorrect()
-    else playWrong()
+    if (opt === questions[current].answer) {
+      playCorrect()
+      // Award +10 immediately for each correct answer — only first try, never replays
+      if (quizMode === 'full' && !isReplay) onCoinsEarned?.(10)
+    } else {
+      playWrong()
+    }
   }
 
   /* ─ Move to next question or finish ──────────────────────────── */
@@ -182,8 +190,28 @@ export default function QuizGenerator({
       }
     }
 
+    // Per-answer +10 coins already given in handleAnswer (first try, non-replay only)
+    // Here we only award the end-of-quiz bonus coins
+    let bonusCoins = 0
+    let lessonMastery = false
+    if (quizMode === 'full' && !isReplay && failedIds.length === 0) {
+      bonusCoins += 30  // perfect: all correct first try
+      if (getProgressPct(userClass, subject, lesson) === 100) {
+        bonusCoins += 50  // lesson mastery: all 3 difficulties now done
+        lessonMastery = true
+      }
+    }
+    if (bonusCoins > 0) onCoinsEarned?.(bonusCoins)
     onHeaderChange?.(null)
-    setResultInfo({ type, sc, total, pct, failedIds, failedCount: failedIds.length })
+    const perAnswerCoins = (quizMode === 'full' && !isReplay) ? sc * 10 : 0
+    setResultInfo({
+      type, sc, total, pct, failedIds, failedCount: failedIds.length,
+      perAnswerCoins,
+      bonusCoins,
+      coinsEarned: perAnswerCoins + bonusCoins,
+      lessonMastery,
+      isReplayResult: isReplay,
+    })
     setPhase('result')
   }
 
@@ -464,7 +492,7 @@ export default function QuizGenerator({
      RESULT SCREENS
   ══════════════════════════════════════════════════════ */
   if (phase === 'result' && resultInfo) {
-    const { type, sc, total, pct, failedCount } = resultInfo
+    const { type, sc, total, pct, failedCount, perAnswerCoins = 0, bonusCoins = 0, coinsEarned = 0, lessonMastery = false, isReplayResult = false } = resultInfo
     const dm    = DIFF_META.find(d => d.key === diff)
     const dIdx  = DIFF_META.findIndex(d => d.key === diff)
     const nextD = DIFF_META[dIdx + 1]
@@ -496,6 +524,21 @@ export default function QuizGenerator({
               All questions have been reset — give it another shot!
             </p>
           </div>
+          {isReplayResult ? (
+            <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 mt-3 text-center">
+              <p className="text-xs text-gray-400 font-semibold">🔄 Already completed — no coins for replays</p>
+            </div>
+          ) : perAnswerCoins > 0 ? (
+            <div className="bg-yellow-50 border border-yellow-300 rounded-2xl px-4 py-3 mt-3 flex items-center justify-center gap-2">
+              <span className="text-lg">🪙</span>
+              <span className="font-bold text-yellow-600">+{perAnswerCoins} Coins Added</span>
+              <span className="text-xs text-yellow-500">({sc} correct × 10, added as you answered)</span>
+            </div>
+          ) : (
+            <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 mt-3 text-center">
+              <p className="text-xs text-gray-400 font-semibold">No coins this round — answer correctly to earn 🪙</p>
+            </div>
+          )}
         </div>
         <div className="flex gap-3">
           <button onClick={retryFull}
@@ -532,6 +575,13 @@ export default function QuizGenerator({
               🔁 Retry Mode: {failedCount} question{failedCount !== 1 ? 's' : ''} will loop until you get them all right!
             </p>
           </div>
+          {perAnswerCoins > 0 && (
+            <div className="bg-yellow-50 border border-yellow-300 rounded-2xl px-4 py-3 mt-3 flex items-center justify-center gap-2">
+              <span className="text-lg">🪙</span>
+              <span className="font-bold text-yellow-600">+{perAnswerCoins} Coins Added</span>
+              <span className="text-xs text-yellow-500">({sc} correct × 10, added as you answered)</span>
+            </div>
+          )}
         </div>
         <div className="flex gap-3">
           <button onClick={continueRetry}
@@ -565,6 +615,9 @@ export default function QuizGenerator({
             <p className="text-xs text-purple-700 font-semibold">
               🔁 {failedCount} question{failedCount !== 1 ? 's' : ''} still repeating — keep going until all are correct!
             </p>
+          </div>
+          <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 mt-3 text-center">
+            <p className="text-xs text-gray-400 font-semibold">🔁 Retry Mode — No coins awarded</p>
           </div>
         </div>
         <button onClick={continueRetry}
@@ -628,6 +681,45 @@ export default function QuizGenerator({
               <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-2.5">
                 <p className="text-xs text-green-700 font-semibold">
                   🔓 {nextD.icon} {nextD.label} is now unlocked! Keep going!
+                </p>
+              </div>
+            )}
+
+            {/* Coin reward */}
+            {coinsEarned > 0 ? (
+              <div className={`rounded-2xl px-4 py-3 mt-3 border-2 ${
+                lessonMastery ? 'bg-amber-50 border-amber-400' : 'bg-yellow-50 border-yellow-400'
+              }`}>
+                {lessonMastery ? (
+                  <>
+                    <p className="text-xs text-amber-700 font-bold text-center mb-2">🏆 Lesson Mastered! Perfect All Three!</p>
+                    <div className="flex items-center justify-center gap-1.5 flex-wrap text-sm font-bold text-amber-600">
+                      <span>+{perAnswerCoins} in-quiz</span>
+                      <span className="text-amber-400">+</span>
+                      <span>30 perfect</span>
+                      <span className="text-amber-400">+</span>
+                      <span>50 mastery</span>
+                      <span className="text-amber-400">=</span>
+                      <span className="font-display text-2xl">🪙 +{coinsEarned}</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs text-yellow-700 font-bold text-center mb-2">🌟 Perfect First Try Bonus!</p>
+                    <div className="flex items-center justify-center gap-2 flex-wrap">
+                      <span className="text-sm font-bold text-yellow-600">+{perAnswerCoins} in-quiz</span>
+                      <span className="text-yellow-400 font-bold">+</span>
+                      <span className="text-sm font-bold text-yellow-600">30 Bonus</span>
+                      <span className="text-yellow-400 font-bold">=</span>
+                      <span className="font-display text-2xl text-yellow-600">🪙 +{coinsEarned}</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 mt-3 text-center">
+                <p className="text-xs text-gray-400 font-semibold">
+                  {isReplayResult ? '🔄 Already mastered — no coins for replays' : '🔁 Retry Mode — No coins awarded'}
                 </p>
               </div>
             )}

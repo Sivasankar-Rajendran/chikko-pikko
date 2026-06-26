@@ -1,8 +1,62 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import { useNavigate } from 'react-router-dom'
-import { CLASS_STUDENTS, WEEKLY_ACTIVITY, WEAKEST_TOPICS, ASSIGNMENTS } from '../../data/mockData'
+import { WEEKLY_ACTIVITY, WEAKEST_TOPICS, ASSIGNMENTS, DEFAULT_CLASS_ASSIGNMENTS, ALL_STUDENTS } from '../../data/mockData'
+import { LESSON_MAP } from '../../data/questions/index'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid } from 'recharts'
+import { getAllStudentsFS, getClassAssignmentsFS, getProgressFS } from '../../services/firestore'
+
+function getRealLessonProgress(progressData, cls, subject, lesson) {
+  const key = `${cls}__${subject}__${lesson}`
+  const lp  = progressData[key]
+  if (!lp) return null  // no real data — caller will fall back
+  const DIFFS = ['easy', 'medium', 'hard']
+  const doneCount = DIFFS.filter(d => lp[d]?.status === 'completed').length
+  return {
+    easy:   lp.easy?.status   || 'locked',
+    medium: lp.medium?.status || 'locked',
+    hard:   lp.hard?.status   || 'locked',
+    pct:    Math.round((doneCount / 3) * 100),
+  }
+}
+
+/* 'num|sec' (HM format) → human label e.g. '5|A' → 'Class 5 · A' */
+function formatClassLabel(cls) {
+  if (!cls) return ''
+  if (cls.includes('|')) {
+    const [num, sec] = cls.split('|')
+    return sec ? `Class ${num} · ${sec}` : `Class ${num}`
+  }
+  return `Class ${cls}`
+}
+
+function getStudentsForClass(classLabel, allStudents = ALL_STUDENTS) {
+  let raw
+  if (classLabel.includes('|')) {
+    // HM pipe format: 'num|sec'  e.g. '1|', '5|A'
+    const [num, sec] = classLabel.split('|')
+    raw = allStudents.filter(s => {
+      const sNum = (s.class || '').replace(/[A-Za-z]/g, '')
+      if (sNum !== num) return false
+      return sec === '' || (s.section || '') === sec
+    })
+  } else if (classLabel === '5A') {
+    raw = allStudents.filter(s => s.class === '5' && s.section === 'A')
+  } else if (classLabel === '5B') {
+    raw = allStudents.filter(s => s.class === '5' && s.section === 'B')
+  } else {
+    raw = allStudents.filter(s => s.class === classLabel)
+  }
+  return raw.map(s => ({
+    id:         s.id,
+    name:       s.name,
+    mathScore:  s.mathScore  ?? 0,
+    engScore:   s.engScore   ?? 0,
+    attendance: s.attendance ?? 0,
+    lastActive: s.lastActive ?? '-',
+    status:     (s.mathScore ?? 0) >= 85 ? 'excellent' : (s.mathScore ?? 0) >= 65 ? 'good' : 'attention',
+  }))
+}
 
 const NAV = [
   { label: 'Dashboard',   icon: '📊' },
@@ -69,14 +123,14 @@ function Sidebar({ tab, setTab, user, onLogout }) {
 }
 
 /* ── Dashboard Tab ───────────────────────────────────────────────────────── */
-function DashboardTab() {
-  const total   = CLASS_STUDENTS.length
-  const present = CLASS_STUDENTS.filter(s => s.attendance > 70).length
+function DashboardTab({ students = [] }) {
+  const total   = students.length
+  const present = students.filter(s => s.attendance > 70).length
   const absent  = total - present
-  const mathAvg = Math.round(CLASS_STUDENTS.reduce((a, s) => a + s.mathScore, 0) / total)
-  const engAvg  = Math.round(CLASS_STUDENTS.reduce((a, s) => a + s.engScore,  0) / total)
-  const attn    = CLASS_STUDENTS.filter(s => s.status === 'attention')
-  const topImp  = [...CLASS_STUDENTS].sort((a, b) => (b.mathScore + b.engScore) - (a.mathScore + a.engScore)).slice(0, 3)
+  const mathAvg = total > 0 ? Math.round(students.reduce((a, s) => a + s.mathScore, 0) / total) : 0
+  const engAvg  = total > 0 ? Math.round(students.reduce((a, s) => a + s.engScore,  0) / total) : 0
+  const attn    = students.filter(s => s.status === 'attention')
+  const topImp  = [...students].sort((a, b) => (b.mathScore + b.engScore) - (a.mathScore + a.engScore)).slice(0, 3)
 
   return (
     <div className="space-y-5">
@@ -120,7 +174,7 @@ function DashboardTab() {
                 }`}>{s.attendance < 70 ? 'High' : 'Medium'}</span>
               </div>
             ))}
-            {CLASS_STUDENTS.filter(s => s.attendance < 80 && s.status !== 'attention').slice(0,1).map(s => (
+            {students.filter(s => s.attendance < 80 && s.status !== 'attention').slice(0,1).map(s => (
               <div key={s.id} className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-600 flex-shrink-0">
                   {s.name.split(' ').map(n => n[0]).join('')}
@@ -249,10 +303,276 @@ function DashboardTab() {
   )
 }
 
+/* ── Student Progress Helpers ────────────────────────────────────────────── */
+function getLessonProgress(score, idx, total) {
+  const start = (idx / total) * 100
+  const end   = ((idx + 1) / total) * 100
+  if (score >= end) return { easy: 'completed', medium: 'completed', hard: 'completed', pct: 100 }
+  if (score > start) {
+    const prog = (score - start) / (end - start)
+    if (prog >= 0.67) return { easy: 'completed', medium: 'completed', hard: 'unlocked', pct: 66 }
+    if (prog >= 0.33) return { easy: 'completed', medium: 'unlocked', hard: 'locked',   pct: 33 }
+    return { easy: 'unlocked', medium: 'locked', hard: 'locked', pct: 10 }
+  }
+  return { easy: 'locked', medium: 'locked', hard: 'locked', pct: 0 }
+}
+
+const DIFF_DISPLAY = {
+  completed: { icon: '✅', cls: 'text-green-600 bg-green-50',  label: 'Done'    },
+  unlocked:  { icon: '🔓', cls: 'text-orange-500 bg-orange-50', label: 'Active' },
+  locked:    { icon: '🔒', cls: 'text-gray-300 bg-gray-50',    label: 'Locked'  },
+}
+
+function SubjectProgress({ label, icon, color, score, lessons }) {
+  const done = lessons.filter(l => l.pct === 100).length
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className="text-base">{icon}</span>
+          <h4 className="font-display text-sm text-gray-700">{label}</h4>
+          <span className="text-[10px] text-gray-400 font-semibold">{done}/{lessons.length} lessons done</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-24 h-2 bg-gray-100 rounded-full overflow-hidden">
+            <div className="h-2 rounded-full" style={{ width: `${score}%`, background: color }} />
+          </div>
+          <span className="text-xs font-bold" style={{ color }}>{score}%</span>
+        </div>
+      </div>
+      <div className="space-y-2">
+        {lessons.map((l, i) => (
+          <div key={i} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl ${l.pct === 100 ? 'bg-green-50' : l.pct > 0 ? 'bg-orange-50' : 'bg-gray-50'}`}>
+            <div className="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+              style={{ background: l.pct === 100 ? '#28B463' : l.pct > 0 ? color : '#d1d5db' }}>
+              {i + 1}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-bold text-gray-700 mb-1">{l.lesson}</div>
+              <div className="flex items-center gap-1.5">
+                {['easy','medium','hard'].map(d => {
+                  const dd = DIFF_DISPLAY[l[d]]
+                  return (
+                    <span key={d} className={`text-[9px] font-bold px-1.5 py-0.5 rounded-lg ${dd.cls}`}>
+                      {dd.icon} {d.charAt(0).toUpperCase() + d.slice(1)}
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+            <div className="flex-shrink-0 text-right min-w-[52px]">
+              <div className="w-12 h-1.5 bg-gray-200 rounded-full overflow-hidden mb-0.5 ml-auto">
+                <div className="h-1.5 rounded-full" style={{ width: `${l.pct}%`, background: l.pct === 100 ? '#28B463' : color }} />
+              </div>
+              <span className={`text-[10px] font-bold ${l.pct === 100 ? 'text-green-600' : l.pct > 0 ? 'text-orange-500' : 'text-gray-400'}`}>
+                {l.pct === 100 ? 'Done ✓' : l.pct > 0 ? `${l.pct}%` : 'Locked'}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/* ── Student Detail View ─────────────────────────────────────────────────── */
+function StudentDetailView({ student, userClass, onBack }) {
+  const full        = ALL_STUDENTS.find(s => s.id === student.id) || {}
+  const mathLessons = LESSON_MAP[userClass]?.maths   || []
+  const engLessons  = LESSON_MAP[userClass]?.english || []
+
+  const [realData,     setRealData]     = useState({})
+  const [progressLoad, setProgressLoad] = useState(true)
+
+  useEffect(() => {
+    getProgressFS(student.id)
+      .then(data => {
+        // Fall back to localStorage if Firestore has nothing
+        if (Object.keys(data).length === 0) {
+          try {
+            const local = JSON.parse(localStorage.getItem(`chikko_quiz_v1_${student.id}`) || '{}')
+            setRealData(local)
+          } catch { setRealData({}) }
+        } else {
+          setRealData(data)
+        }
+      })
+      .catch(() => {
+        try {
+          const local = JSON.parse(localStorage.getItem(`chikko_quiz_v1_${student.id}`) || '{}')
+          setRealData(local)
+        } catch { setRealData({}) }
+      })
+      .finally(() => setProgressLoad(false))
+  }, [student.id])
+
+  const hasRealData = Object.keys(realData).length > 0
+
+  const mathProgress = mathLessons.map((lesson, i) => {
+    const real = hasRealData ? getRealLessonProgress(realData, userClass, 'maths', lesson) : null
+    return { lesson, ...(real ?? getLessonProgress(student.mathScore, i, mathLessons.length)) }
+  })
+  const engProgress = engLessons.map((lesson, i) => {
+    const real = hasRealData ? getRealLessonProgress(realData, userClass, 'english', lesson) : null
+    return { lesson, ...(real ?? getLessonProgress(student.engScore, i, engLessons.length)) }
+  })
+
+  const inProgress = [
+    ...mathProgress.filter(l => l.pct > 0 && l.pct < 100).map(l => ({ ...l, subject: 'Maths',   color: '#FF8A00' })),
+    ...engProgress.filter(l  => l.pct > 0 && l.pct < 100).map(l => ({ ...l, subject: 'English', color: '#1E88E5' })),
+  ]
+  const notStarted = [
+    ...mathProgress.filter(l => l.pct === 0).map(l => ({ ...l, subject: 'Maths' })),
+    ...engProgress.filter(l  => l.pct === 0).map(l => ({ ...l, subject: 'English' })),
+  ]
+  const mathDone = mathProgress.filter(l => l.pct === 100).length
+  const engDone  = engProgress.filter(l  => l.pct === 100).length
+
+  const STATUS_PILL = { excellent: 'bg-green-100 text-green-700', good: 'bg-blue-100 text-blue-700', attention: 'bg-red-100 text-red-700' }
+
+  if (progressLoad) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="text-center">
+          <div className="text-3xl mb-3 animate-bounce">📊</div>
+          <div className="text-sm font-semibold text-gray-500">Loading progress from Firebase…</div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Back + title */}
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-gray-100 text-gray-500 text-lg transition-colors">
+          ←
+        </button>
+        <h2 className="font-display text-lg text-gray-700">Student Progress</h2>
+        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ml-1 ${STATUS_PILL[student.status]}`}>{student.status}</span>
+        {hasRealData && <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-500 ml-1">🔥 Live from Firebase</span>}
+      </div>
+
+      {/* Profile banner */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex items-center gap-5">
+        <div className="w-14 h-14 rounded-2xl bg-blue-100 flex items-center justify-center text-xl font-bold text-blue-600 flex-shrink-0">
+          {student.name.split(' ').map(n => n[0]).join('')}
+        </div>
+        <div className="flex-1 min-w-0">
+          <h3 className="font-display text-xl text-gray-800">{student.name}</h3>
+          <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-400 flex-wrap">
+            <span className="font-semibold">Class {userClass}</span>
+            {full.streak   && <span>🔥 {full.streak} day streak</span>}
+            {full.coins !== undefined && <span>🪙 {full.coins.toLocaleString()} coins</span>}
+            <span>⏱ {student.lastActive}</span>
+            {full.bloodGroup && <span>🩸 {full.bloodGroup}</span>}
+          </div>
+        </div>
+        <div className="flex gap-6 flex-shrink-0">
+          {[
+            { val: `${student.mathScore}%`,  lbl: 'Maths',       col: '#FF8A00' },
+            { val: `${student.engScore}%`,   lbl: 'English',     col: '#1E88E5' },
+            { val: `${student.attendance}%`, lbl: 'Attendance',  col: '#28B463' },
+            { val: `${mathDone + engDone}/${mathLessons.length + engLessons.length}`, lbl: 'Lessons Done', col: '#8E44AD' },
+          ].map((s, i) => (
+            <div key={i} className="text-center">
+              <div className="font-display text-xl leading-none" style={{ color: s.col }}>{s.val}</div>
+              <div className="text-[10px] text-gray-400 mt-0.5">{s.lbl}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Main 3-col layout */}
+      <div className="grid grid-cols-3 gap-4">
+        {/* Lesson progress — spans 2 cols */}
+        <div className="col-span-2 space-y-4">
+          <SubjectProgress label="Maths"   icon="🐿️" color="#FF8A00" score={student.mathScore} lessons={mathProgress} />
+          <SubjectProgress label="English" icon="🐦" color="#1E88E5" score={student.engScore}  lessons={engProgress}  />
+        </div>
+
+        {/* Right sidebar */}
+        <div className="space-y-4">
+          {/* Currently working on */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+            <h4 className="font-display text-sm text-gray-700 mb-3">🎯 In Progress</h4>
+            {inProgress.length > 0 ? (
+              <div className="space-y-2.5">
+                {inProgress.map((l, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <div className="w-2 h-2 rounded-full mt-1.5 flex-shrink-0" style={{ background: l.color }} />
+                    <div>
+                      <div className="text-xs font-bold text-gray-700">{l.lesson}</div>
+                      <div className="text-[10px] text-gray-400">{l.subject} · {l.pct}% done</div>
+                      <div className="w-20 h-1 bg-gray-100 rounded-full mt-0.5 overflow-hidden">
+                        <div className="h-1 rounded-full" style={{ width: `${l.pct}%`, background: l.color }} />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-green-600 font-semibold">🎉 All lessons in progress done!</p>
+            )}
+          </div>
+
+          {/* Not yet started */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+            <h4 className="font-display text-sm text-gray-700 mb-3">🔒 Not Started</h4>
+            {notStarted.length > 0 ? (
+              <div className="space-y-1.5">
+                {notStarted.slice(0, 6).map((l, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="text-xs">🔒</span>
+                    <div>
+                      <div className="text-[10px] font-bold text-gray-500">{l.lesson}</div>
+                      <div className="text-[9px] text-gray-400">{l.subject}</div>
+                    </div>
+                  </div>
+                ))}
+                {notStarted.length > 6 && (
+                  <p className="text-[10px] text-gray-400 mt-1">+{notStarted.length - 6} more</p>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-green-600 font-semibold">🎉 All topics started!</p>
+            )}
+          </div>
+
+          {/* Completion summary */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+            <h4 className="font-display text-sm text-gray-700 mb-3">📊 Completion</h4>
+            {[
+              { label: 'Maths',   done: mathDone, total: mathLessons.length, color: '#FF8A00' },
+              { label: 'English', done: engDone,  total: engLessons.length,  color: '#1E88E5' },
+            ].map((r, i) => (
+              <div key={i} className="mb-3">
+                <div className="flex justify-between text-[10px] font-semibold text-gray-500 mb-1">
+                  <span>{r.label}</span>
+                  <span style={{ color: r.color }}>{r.done}/{r.total} lessons</span>
+                </div>
+                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-2 rounded-full" style={{ width: `${r.total ? (r.done/r.total)*100 : 0}%`, background: r.color }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /* ── Students Tab ────────────────────────────────────────────────────────── */
-function StudentsTab() {
-  const [search, setSearch] = useState('')
-  const filtered = CLASS_STUDENTS.filter(s => s.name.toLowerCase().includes(search.toLowerCase()))
+function StudentsTab({ students = [], userClass = 1 }) {
+  const [search,          setSearch]          = useState('')
+  const [selectedStudent, setSelectedStudent] = useState(null)
+  const filtered = students.filter(s => s.name.toLowerCase().includes(search.toLowerCase()))
+
+  if (selectedStudent) {
+    return <StudentDetailView student={selectedStudent} userClass={userClass} onBack={() => setSelectedStudent(null)} />
+  }
+
   const STATUS = {
     excellent: 'bg-green-100 text-green-700',
     good:      'bg-blue-100 text-blue-700',
@@ -263,13 +583,12 @@ function StudentsTab() {
       <div className="flex gap-3">
         <input type="text" placeholder="Search students…" value={search} onChange={e => setSearch(e.target.value)}
           className="flex-1 px-4 py-2.5 rounded-xl border-2 border-gray-200 focus:outline-none focus:border-green-400 text-sm font-semibold" />
-        <button className="btn-primary gradient-green px-5 text-sm">+ Add Student</button>
       </div>
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
-              {['Student','Maths','English','Attendance','Last Active','Status',''].map(h => (
+              {['Student','Maths','English','Last Active','Status',''].map(h => (
                 <th key={h} className="text-left py-3 px-4 text-[10px] font-bold text-gray-500 uppercase tracking-wide">{h}</th>
               ))}
             </tr>
@@ -297,13 +616,16 @@ function StudentsTab() {
                     <span className="text-[10px] font-bold text-gray-600">{s.engScore}%</span>
                   </div>
                 </td>
-                <td className="py-3 px-4 text-xs font-bold text-gray-600">{s.attendance}%</td>
                 <td className="py-3 px-4 text-[10px] text-gray-400">{s.lastActive}</td>
                 <td className="py-3 px-4">
                   <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${STATUS[s.status]}`}>{s.status}</span>
                 </td>
                 <td className="py-3 px-4">
-                  <button className="text-[10px] text-brand-blue font-bold hover:underline">View →</button>
+                  <button
+                    onClick={() => setSelectedStudent(s)}
+                    className="text-[10px] text-brand-blue font-bold hover:underline hover:text-blue-700 transition-colors">
+                    View →
+                  </button>
                 </td>
               </tr>
             ))}
@@ -454,13 +776,44 @@ export default function TeacherDashboard() {
   const [tab, setTab] = useState('Dashboard')
   const handleLogout = () => { logout(); navigate('/') }
 
+  const [allStudents,   setAllStudents]   = useState(ALL_STUDENTS)
+  const [assignments,   setAssignments]   = useState(DEFAULT_CLASS_ASSIGNMENTS)
+  const [dataLoading,   setDataLoading]   = useState(true)
+
+  // Load students + assignments from Firestore
+  useEffect(() => {
+    Promise.all([getAllStudentsFS(), getClassAssignmentsFS()])
+      .then(([fsStudents, fsAssign]) => {
+        if (fsStudents.length) setAllStudents(fsStudents)
+        if (fsAssign)          setAssignments(fsAssign)
+      })
+      .catch(() => {})
+      .finally(() => setDataLoading(false))
+  }, [])
+
+  const myClasses = Object.entries(assignments)
+    .filter(([, tid]) => tid === user.id)
+    .map(([cls]) => cls)
+
+  const [selectedClass, setSelectedClass] = useState(user.class || '')
+
+  // After Firestore loads, pick the right default class
+  useEffect(() => {
+    if (dataLoading) return
+    if (myClasses.includes(selectedClass)) return
+    setSelectedClass(myClasses[0] ?? '')
+  }, [dataLoading, assignments])
+
+  // Re-derive classStudents from Firestore data using the local helper
+  const classStudents = getStudentsForClass(selectedClass, allStudents)
+
   const renderTab = () => {
     switch (tab) {
-      case 'Dashboard':   return <DashboardTab />
-      case 'Students':    return <StudentsTab />
+      case 'Dashboard':   return <DashboardTab students={classStudents} />
+      case 'Students':    return <StudentsTab students={classStudents} userClass={parseInt(selectedClass.split('|')[0]) || 1} />
       case 'Assignments': return <AssignmentsTab />
       case 'Reports':     return <ReportsTab />
-      default:            return <DashboardTab />
+      default:            return <DashboardTab students={classStudents} />
     }
   }
 
@@ -471,11 +824,17 @@ export default function TeacherDashboard() {
         <div className="bg-white border-b border-gray-100 px-6 py-3.5 flex items-center justify-between sticky top-0 z-30 shadow-sm">
           <div>
             <h1 className="font-display text-xl text-gray-800">Welcome, {user.name} 👋</h1>
-            <p className="text-xs text-gray-400">Class Teacher — {user.class} · {user.school}</p>
+            <p className="text-xs text-gray-400">Class Teacher — {formatClassLabel(selectedClass)} · {user.school}</p>
           </div>
           <div className="flex items-center gap-3">
-            <select className="px-3 py-1.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 focus:outline-none bg-white">
-              <option>Class 5A</option>
+            <select
+              value={selectedClass}
+              onChange={e => setSelectedClass(e.target.value)}
+              className="px-3 py-1.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 focus:outline-none bg-white">
+              {myClasses.length > 0
+                ? myClasses.map(cls => <option key={cls} value={cls}>{formatClassLabel(cls)}</option>)
+                : <option value="">No class assigned</option>
+              }
             </select>
             <div className="relative">
               <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-lg cursor-pointer">🔔</div>
