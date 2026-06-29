@@ -51,12 +51,16 @@ export const LESSON_MAP = {
     english: ['Advanced Grammar', 'Letter Writing'],
   },
   11: {
-    maths: ['Sets & Functions', 'Trigonometry'],
-    english: ['Advanced Writing', 'Literature Analysis'],
+    maths:    ['Sets & Functions', 'Trigonometry'],
+    english:  ['Advanced Writing', 'Literature Analysis'],
+    physics:  ['Physical World', 'Units & Measurements'],
+    chemistry: ['Basic Concepts of Chemistry', 'Structure of Atom'],
   },
   12: {
-    maths: ['Relations & Functions', 'Calculus'],
-    english: ['Writing Skills', 'Literature'],
+    maths:    ['Relations & Functions', 'Calculus'],
+    english:  ['Writing Skills', 'Literature'],
+    physics:  ['Electric Charges & Fields', 'Electrostatic Potential'],
+    chemistry: ['The Solid State', 'Solutions'],
   },
 }
 

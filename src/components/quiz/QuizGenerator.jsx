@@ -10,8 +10,10 @@ const DIFF_META = [
 ]
 
 const SUBJ_META = [
-  { key: 'maths',   label: 'Maths',   emoji: '🐿️', col: '#FF8A00' },
-  { key: 'english', label: 'English', emoji: '🐦', col: '#1E88E5' },
+  { key: 'maths',     label: 'Maths',     emoji: '🐿️', col: '#FF8A00' },
+  { key: 'english',   label: 'English',   emoji: '🐦', col: '#1E88E5' },
+  { key: 'physics',   label: 'Physics',   emoji: '⚡', col: '#1976D2' },
+  { key: 'chemistry', label: 'Chemistry', emoji: '🧪', col: '#7B1FA2' },
 ]
 
 function ProgressSteps({ pct }) {
@@ -171,7 +173,8 @@ export default function QuizGenerator({
         setDiffState(userClass, subject, lesson, diff, { failedIds: [] })
         type = 'fail'
       } else if (failedIds.length === 0) {
-        completeDiff(userClass, subject, lesson, diff)
+        // Perfect: all correct in a single full attempt
+        completeDiff(userClass, subject, lesson, diff, true)
         type = 'complete'
       } else {
         // ≥70% but some wrong — save for retry
@@ -179,9 +182,9 @@ export default function QuizGenerator({
         type = 'partial'
       }
     } else {
-      // retry mode
+      // retry mode — had mistakes before, so NOT perfect
       if (failedIds.length === 0) {
-        completeDiff(userClass, subject, lesson, diff)
+        completeDiff(userClass, subject, lesson, diff, false)
         type = 'complete'
       } else {
         // still some wrong — update and loop
@@ -343,7 +346,7 @@ export default function QuizGenerator({
         <div className="mb-6">
           <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Subject</p>
           <div className="grid grid-cols-2 gap-4">
-            {SUBJ_META.map(s => (
+            {SUBJ_META.filter(s => classLessons[s.key]).map(s => (
               <button key={s.key}
                 onClick={() => { setSubject(s.key); setLesson(null) }}
                 className={`flex items-center gap-3 p-5 rounded-2xl border-2 font-bold transition-all text-base ${

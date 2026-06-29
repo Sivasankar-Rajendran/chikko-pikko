@@ -114,6 +114,14 @@ export async function saveProgressFS(studentId, data) {
   await setDoc(doc(db, 'progress', studentId), data)
 }
 
+/* One read for all students — use in teacher view instead of N individual reads */
+export async function getAllProgressFS() {
+  const snap = await getDocs(collection(db, 'progress'))
+  const result = {}
+  snap.docs.forEach(d => { result[d.id] = d.data() })
+  return result
+}
+
 /* ── SEED / CHECK ──────────────────────────────────────────── */
 export async function isSeeded() {
   const snap = await getDocs(collection(db, 'staff'))

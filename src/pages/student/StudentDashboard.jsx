@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import { useNavigate } from 'react-router-dom'
 import { GAMES, STORE_ITEMS, ASSIGNMENTS, BADGES } from '../../data/mockData'
@@ -26,6 +26,10 @@ const LESSON_ICONS = {
   'Reported Speech':'💬','Voice':'🔊','Grammar':'📝','Writing Skills':'✍️',
   'Advanced Grammar':'📖','Literature Analysis':'📚','Advanced Writing':'✏️','Literature':'📖',
   'Nouns & Pronouns':'📌','Adjectives':'🎨',
+  'Physical World':'🌍','Units & Measurements':'📏',
+  'Electric Charges & Fields':'⚡','Electrostatic Potential':'🔋',
+  'Basic Concepts of Chemistry':'⚗️','Structure of Atom':'⚛️',
+  'The Solid State':'💎','Solutions':'🧪',
 }
 
 const NAV_ITEMS = [
@@ -115,7 +119,7 @@ function Sidebar({ tab, setTab, user, onLogout }) {
 }
 
 /* ── Home Tab ────────────────────────────────────────────────────────────── */
-function HomeTab({ user, coins, setTab, userClass, getProgressPct }) {
+function HomeTab({ user, coins, streak, badges, setTab, goToLearning, userClass, getProgressPct }) {
   const pending = ASSIGNMENTS.filter(a => a.status === 'pending')
   const mathLessons = LESSON_MAP[userClass]?.maths || []
   const engLessons  = LESSON_MAP[userClass]?.english || []
@@ -137,10 +141,10 @@ function HomeTab({ user, coins, setTab, userClass, getProgressPct }) {
       {/* Stat strip */}
       <div className="grid grid-cols-4 gap-3">
         {[
-          { icon: '🔥', value: user.streak,               sub: 'Day Streak',   bg: 'bg-orange-50', border: 'border-orange-100', val: 'text-brand-orange' },
+          { icon: '🔥', value: streak ?? user.streak ?? 0,  sub: 'Day Streak',   bg: 'bg-orange-50', border: 'border-orange-100', val: 'text-brand-orange' },
           { icon: '🪙', value: coins.toLocaleString(),  sub: 'Total Coins',  bg: 'bg-yellow-50', border: 'border-yellow-100', val: 'text-yellow-600'   },
           { icon: '🌳', value: `Level ${user.level}`,   sub: 'Garden Level', bg: 'bg-green-50',  border: 'border-green-100',  val: 'text-brand-green'  },
-          { icon: '🏅', value: user.badges,              sub: 'Badges',       bg: 'bg-blue-50',   border: 'border-blue-100',   val: 'text-brand-blue'   },
+          { icon: '🏅', value: badges ?? user.badges ?? 0,  sub: 'Badges',       bg: 'bg-blue-50',   border: 'border-blue-100',   val: 'text-brand-blue'   },
         ].map((s, i) => (
           <div key={i} className={`${s.bg} border ${s.border} rounded-2xl px-4 py-3 flex items-center gap-3`}>
             <span className="text-3xl">{s.icon}</span>
@@ -172,9 +176,11 @@ function HomeTab({ user, coins, setTab, userClass, getProgressPct }) {
                     <div className="text-sm font-bold text-gray-700">{a.subject}</div>
                     <div className="text-xs text-gray-500">{a.questions} Questions</div>
                   </div>
-                  <button className={`text-xs font-bold px-3 py-1.5 rounded-xl text-white ${
-                    a.subject === 'Maths' ? 'bg-brand-orange' : 'bg-brand-blue'
-                  }`}>Start →</button>
+                  <button
+                    onClick={() => goToLearning(a.subject)}
+                    className={`text-xs font-bold px-3 py-1.5 rounded-xl text-white ${
+                      a.subject === 'Maths' ? 'bg-brand-orange' : 'bg-brand-blue'
+                    }`}>Start →</button>
                 </div>
               ))}
               <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-yellow-50 border border-yellow-100">
@@ -357,8 +363,12 @@ function HomeTab({ user, coins, setTab, userClass, getProgressPct }) {
 }
 
 /* ── Islands Tab ─────────────────────────────────────────────────────────── */
-const MATHS_COLS   = ['#FF8A00','#E65C00','#28A745','#7B2D8B','#1565C0']
-const ENGLISH_COLS = ['#1E88E5','#00897B','#6D4C41','#8E24AA','#1565C0']
+const SUBJECT_CONFIG = {
+  maths:     { label: 'Maths',     icon: '🐿️', cols: ['#FF8A00','#E65C00','#28A745','#7B2D8B','#1565C0'] },
+  english:   { label: 'English',   icon: '🐦', cols: ['#1E88E5','#00897B','#6D4C41','#8E24AA','#1565C0'] },
+  physics:   { label: 'Physics',   icon: '⚡', cols: ['#1976D2','#0288D1','#0097A7','#00838F','#006064'] },
+  chemistry: { label: 'Chemistry', icon: '🧪', cols: ['#7B1FA2','#8E24AA','#6A1B9A','#4A148C','#38006b'] },
+}
 
 function playWaveSound() {
   try {
@@ -388,19 +398,23 @@ function playWaveSound() {
 }
 
 
-function IslandsTab({ userClass, quizProgress, goToQuiz }) {
+function IslandsTab({ userClass, quizProgress, goToQuiz, initialSubject = 'Maths' }) {
   const { getProgressPct, resetLesson } = quizProgress
-  const [subject,     setSubject]     = useState('Maths')
-  const [mathsSailed, setMathsSailed] = useState(() => new Set())
-  const [engSailed,   setEngSailed]   = useState(() => new Set())
-  const [sailTarget,  setSailTarget]  = useState(null)   // rightIdx currently sailing to
-  const [justArrived, setJustArrived] = useState(null)   // rightIdx for arrival flash
+  const subjects = Object.keys(LESSON_MAP[userClass] || { maths: [], english: [] })
+  const defaultSubject = subjects.find(s => s === initialSubject.toLowerCase()) || subjects[0] || 'maths'
+  const [subKey,      setSubKey]     = useState(defaultSubject)
+  const [sailedMap,   setSailedMap]  = useState({})
+  const [sailTarget,  setSailTarget]  = useState(null)
+  const [justArrived, setJustArrived] = useState(null)
 
-  const subKey    = subject === 'Maths' ? 'maths' : 'english'
-  const lessons   = LESSON_MAP[userClass]?.[subKey] || []
-  const cols      = subject === 'Maths' ? MATHS_COLS : ENGLISH_COLS
-  const sailedTo  = subject === 'Maths' ? mathsSailed : engSailed
-  const setSailed = subject === 'Maths' ? setMathsSailed : setEngSailed
+  const cfg     = SUBJECT_CONFIG[subKey] || SUBJECT_CONFIG.maths
+  const lessons = LESSON_MAP[userClass]?.[subKey] || []
+  const cols    = cfg.cols
+  const sailedTo  = sailedMap[subKey] || new Set()
+  const setSailed = (updater) => setSailedMap(prev => ({
+    ...prev,
+    [subKey]: typeof updater === 'function' ? updater(prev[subKey] || new Set()) : updater,
+  }))
 
   const islands = lessons.map((les, i) => {
     const pct          = getProgressPct(userClass, subKey, les)
@@ -408,7 +422,7 @@ function IslandsTab({ userClass, quizProgress, goToQuiz }) {
     const locked       = !prevComplete
     return {
       name: les, level: i + 1,
-      icon:  LESSON_ICONS[les] || (subKey === 'maths' ? '📐' : '📖'),
+      icon:  LESSON_ICONS[les] || cfg.icon || '📚',
       color: cols[i] || cols[0],
       pct, locked,
       completed:  !locked && pct === 100,
@@ -444,7 +458,7 @@ function IslandsTab({ userClass, quizProgress, goToQuiz }) {
   }
 
   function handleReset() {
-    if (window.confirm(`Reset all ${subject} progress? This cannot be undone.`)) {
+    if (window.confirm(`Reset all ${cfg.label} progress? This cannot be undone.`)) {
       lessons.forEach(l => resetLesson(userClass, subKey, l))
       setSailed(new Set())
       setSailTarget(null)
@@ -459,18 +473,22 @@ function IslandsTab({ userClass, quizProgress, goToQuiz }) {
     <div className="space-y-4">
 
       {/* Subject toggle + reset */}
-      <div className="flex items-center justify-between">
-        <div className="flex gap-3">
-          {['Maths','English'].map(s => (
-            <button key={s} onClick={() => setSubject(s)}
-              className={`px-5 py-2.5 rounded-2xl font-bold text-sm transition-all ${
-                subject === s
-                  ? s === 'Maths' ? 'gradient-orange text-white shadow-lg' : 'gradient-blue text-white shadow-lg'
-                  : 'bg-white text-gray-600 border-2 border-gray-200 hover:border-gray-300'
-              }`}>
-              {s === 'Maths' ? '🐿️' : '🐦'} {s}
-            </button>
-          ))}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex gap-2 flex-wrap">
+          {subjects.map(s => {
+            const sc = SUBJECT_CONFIG[s] || { label: s, icon: '📚', cols: ['#555'] }
+            return (
+              <button key={s} onClick={() => setSubKey(s)}
+                className={`px-4 py-2 rounded-2xl font-bold text-sm transition-all ${
+                  subKey === s
+                    ? 'text-white shadow-lg'
+                    : 'bg-white text-gray-600 border-2 border-gray-200 hover:border-gray-300'
+                }`}
+                style={subKey === s ? { background: sc.cols[0] } : {}}>
+                {sc.icon} {sc.label}
+              </button>
+            )
+          })}
         </div>
         <button onClick={handleReset}
           className="text-xs text-red-400 hover:text-red-600 border border-red-200 hover:border-red-300 px-3 py-1.5 rounded-xl transition-all bg-white">
@@ -484,7 +502,7 @@ function IslandsTab({ userClass, quizProgress, goToQuiz }) {
         {/* Header bar */}
         <div className="bg-white px-6 py-4 flex items-center justify-between">
           <div>
-            <h3 className="font-display text-lg text-gray-700">{subject} Island Journey 🗺️</h3>
+            <h3 className="font-display text-lg text-gray-700">{cfg.icon} {cfg.label} Island Journey 🗺️</h3>
             <p className="text-xs text-gray-400 mt-0.5">Complete each island, then click the boat ⛵ to sail to the next!</p>
           </div>
           <div className="text-right">
@@ -845,23 +863,89 @@ function BadgesTab() {
   )
 }
 
+const IDLE_MS = 5 * 60 * 1000  // 5 minutes total idle
+const WARN_MS = 30 * 1000       // warn 30 s before signout
+
 /* ── Root ────────────────────────────────────────────────────────────────── */
 export default function StudentDashboard() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [tab,       setTab]       = useState('Home')
-  const [coins,     setCoins]     = useState(user.coins)
   const [coinFlash, setCoinFlash] = useState({ amount: 0, key: 0 })
   const [quizConfig,     setQuizConfig]     = useState(null)
   const [quizKey,        setQuizKey]        = useState(0)
   const [quizHeaderInfo, setQuizHeaderInfo] = useState(null)
   const quizBackFn = React.useRef(null)
 
-  const handleLogout   = () => { logout(); navigate('/') }
-  const handlePurchase = (p) => setCoins(c => c - p)
+  const handleLogout = useCallback(() => { logout(); navigate('/') }, [logout, navigate])
+
+  // ── Idle auto-signout ────────────────────────────────────────────────────
+  const [idleWarning, setIdleWarning] = useState(false)
+  const [countdown,   setCountdown]   = useState(30)
+  const idleRef       = useRef(null)
+  const warnRef       = useRef(null)
+  const countRef      = useRef(null)
+  const warningActive = useRef(false)   // true once popup is visible — blocks activity reset
+
+  const startIdleTimers = useCallback(() => {
+    clearTimeout(idleRef.current)
+    clearTimeout(warnRef.current)
+    clearInterval(countRef.current)
+    warningActive.current = false
+    setIdleWarning(false)
+
+    // Show warning at 4:30
+    warnRef.current = setTimeout(() => {
+      warningActive.current = true
+      setIdleWarning(true)
+      setCountdown(30)
+      countRef.current = setInterval(() => {
+        setCountdown(c => (c > 1 ? c - 1 : 0))
+      }, 1000)
+    }, IDLE_MS - WARN_MS)
+
+    // Auto-signout at 5:00
+    idleRef.current = setTimeout(() => {
+      clearInterval(countRef.current)
+      handleLogout()
+    }, IDLE_MS)
+  }, [handleLogout])
+
+  useEffect(() => {
+    function onActivity() {
+      // Once the warning popup is showing, ignore all activity — only buttons control it
+      if (warningActive.current) return
+      startIdleTimers()
+    }
+
+    const EVENTS = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click']
+    EVENTS.forEach(e => window.addEventListener(e, onActivity, { passive: true }))
+    startIdleTimers()
+
+    return () => {
+      EVENTS.forEach(e => window.removeEventListener(e, onActivity))
+      clearTimeout(idleRef.current)
+      clearTimeout(warnRef.current)
+      clearInterval(countRef.current)
+    }
+  }, [startIdleTimers])
+  // ────────────────────────────────────────────────────────────────────────
 
   const userClassNum = parseInt((user.class || '5').toString().replace(/\D/g, '')) || 5
-  const quizProgress = useQuizProgress(user.id)
+  const quizProgress = useQuizProgress(user.id, user.coins || 0)
+  const { coins, addCoins, spendCoins, streak, badges } = quizProgress
+
+  const handlePurchase = (p) => spendCoins(p)
+
+  const [islandsSubject, setIslandsSubject] = useState('Maths')
+  const [islandsKey,     setIslandsKey]     = useState(0)
+
+  // Navigate from Home Mission cards → My Learning with subject pre-selected
+  function goToLearning(subject) {
+    setIslandsSubject(subject)
+    setIslandsKey(k => k + 1)  // remount IslandsTab so initialSubject takes effect
+    setTab('Islands')
+  }
 
   // Navigate from island "Continue/Start" → Quiz tab with pre-selected lesson
   function goToQuiz(subject, lesson) {
@@ -873,11 +957,12 @@ export default function StudentDashboard() {
   const renderTab = () => {
     switch (tab) {
       case 'Home':        return (
-        <HomeTab user={user} coins={coins} setTab={setTab}
+        <HomeTab user={user} coins={coins} streak={streak} badges={badges} setTab={setTab} goToLearning={goToLearning}
           userClass={userClassNum} getProgressPct={quizProgress.getProgressPct} />
       )
       case 'Islands':     return (
-        <IslandsTab userClass={userClassNum} quizProgress={quizProgress} goToQuiz={goToQuiz} />
+        <IslandsTab key={islandsKey} userClass={userClassNum} quizProgress={quizProgress}
+          goToQuiz={goToQuiz} initialSubject={islandsSubject} />
       )
       case 'Assignments': return <AssignmentsTab />
       case 'Quiz': {
@@ -961,7 +1046,7 @@ export default function StudentDashboard() {
                 onHeaderChange={setQuizHeaderInfo}
                 onCoinsEarned={(n) => {
                   if (n > 0) {
-                    setCoins(prev => prev + n)
+                    addCoins(n)
                     const key = Date.now()
                     setCoinFlash({ amount: n, key })
                     setTimeout(() => setCoinFlash(f => f.key === key ? { amount: 0, key: 0 } : f), 1900)
@@ -977,7 +1062,7 @@ export default function StudentDashboard() {
       case 'Store':       return <StoreTab coins={coins} onPurchase={handlePurchase} />
       case 'Badges':      return <BadgesTab />
       default:            return (
-        <HomeTab user={user} coins={coins} setTab={setTab}
+        <HomeTab user={user} coins={coins} streak={streak} badges={badges} setTab={setTab} goToLearning={goToLearning}
           userClass={userClassNum} getProgressPct={quizProgress.getProgressPct} />
       )
     }
@@ -985,6 +1070,36 @@ export default function StudentDashboard() {
 
   return (
     <div className="flex min-h-screen bg-gray-50 font-body">
+
+      {/* ── Idle warning overlay ─────────────────────────────────────────── */}
+      {idleWarning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-sm w-full mx-4 text-center">
+            <div className="text-5xl mb-4">😴</div>
+            <h2 className="font-display text-xl font-bold text-gray-800 mb-1">Still there?</h2>
+            <p className="text-sm text-gray-500 mb-5">
+              You've been inactive for a while.<br />
+              You'll be signed out automatically in
+            </p>
+            <div className="w-20 h-20 rounded-full border-4 border-orange-400 flex items-center justify-center mx-auto mb-5">
+              <span className="font-display text-3xl font-bold text-orange-500">{countdown}</span>
+            </div>
+            <p className="text-xs text-gray-400 mb-5">seconds</p>
+            <button
+              onClick={startIdleTimers}
+              className="w-full py-3 rounded-2xl bg-brand-green text-white font-bold text-sm hover:bg-green-600 transition-colors">
+              Yes, keep me signed in
+            </button>
+            <button
+              onClick={handleLogout}
+              className="mt-2 w-full py-2.5 rounded-2xl text-gray-400 text-sm hover:text-gray-600 transition-colors">
+              Sign out now
+            </button>
+          </div>
+        </div>
+      )}
+      {/* ────────────────────────────────────────────────────────────────── */}
+
       <Sidebar tab={tab} setTab={setTab} user={{ ...user, coins }} onLogout={handleLogout} />
       <main className="flex-1 overflow-auto min-w-0">
         {/* Top bar */}

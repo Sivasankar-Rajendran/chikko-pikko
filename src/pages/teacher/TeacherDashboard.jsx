@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { WEEKLY_ACTIVITY, WEAKEST_TOPICS, ASSIGNMENTS, DEFAULT_CLASS_ASSIGNMENTS, ALL_STUDENTS } from '../../data/mockData'
 import { LESSON_MAP } from '../../data/questions/index'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid } from 'recharts'
-import { getAllStudentsFS, getClassAssignmentsFS, getProgressFS } from '../../services/firestore'
+import { getAllStudentsFS, getClassAssignmentsFS, getProgressFS, getAllProgressFS } from '../../services/firestore'
 
 function getRealLessonProgress(progressData, cls, subject, lesson) {
   const key = `${cls}__${subject}__${lesson}`
@@ -325,6 +325,7 @@ const DIFF_DISPLAY = {
 
 function SubjectProgress({ label, icon, color, score, lessons }) {
   const done = lessons.filter(l => l.pct === 100).length
+  const lessonPct = lessons.length > 0 ? Math.round(lessons.reduce((sum, l) => sum + l.pct, 0) / lessons.length) : 0
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
       <div className="flex items-center justify-between mb-3">
@@ -335,9 +336,9 @@ function SubjectProgress({ label, icon, color, score, lessons }) {
         </div>
         <div className="flex items-center gap-2">
           <div className="w-24 h-2 bg-gray-100 rounded-full overflow-hidden">
-            <div className="h-2 rounded-full" style={{ width: `${score}%`, background: color }} />
+            <div className="h-2 rounded-full" style={{ width: `${lessonPct}%`, background: color }} />
           </div>
-          <span className="text-xs font-bold" style={{ color }}>{score}%</span>
+          <span className="text-xs font-bold" style={{ color }}>{lessonPct}%</span>
         </div>
       </div>
       <div className="space-y-2">
@@ -375,19 +376,26 @@ function SubjectProgress({ label, icon, color, score, lessons }) {
   )
 }
 
+/* ── Subject config for teacher view ────────────────────────────────────── */
+const SUBJ_CFG = {
+  maths:     { label: 'Maths',     icon: '🐿️', col: '#FF8A00' },
+  english:   { label: 'English',   icon: '🐦', col: '#1E88E5' },
+  physics:   { label: 'Physics',   icon: '⚡', col: '#1976D2' },
+  chemistry: { label: 'Chemistry', icon: '🧪', col: '#7B1FA2' },
+}
+
 /* ── Student Detail View ─────────────────────────────────────────────────── */
 function StudentDetailView({ student, userClass, onBack }) {
-  const full        = ALL_STUDENTS.find(s => s.id === student.id) || {}
-  const mathLessons = LESSON_MAP[userClass]?.maths   || []
-  const engLessons  = LESSON_MAP[userClass]?.english || []
+  const full         = ALL_STUDENTS.find(s => s.id === student.id) || {}
+  const classSubjects = Object.keys(LESSON_MAP[userClass] || { maths: [], english: [] })
 
   const [realData,     setRealData]     = useState({})
   const [progressLoad, setProgressLoad] = useState(true)
 
   useEffect(() => {
     getProgressFS(student.id)
-      .then(data => {
-        // Fall back to localStorage if Firestore has nothing
+      .then(fsData => {
+        const { __coins: _c, ...data } = fsData
         if (Object.keys(data).length === 0) {
           try {
             const local = JSON.parse(localStorage.getItem(`chikko_quiz_v1_${student.id}`) || '{}')
@@ -406,27 +414,37 @@ function StudentDetailView({ student, userClass, onBack }) {
       .finally(() => setProgressLoad(false))
   }, [student.id])
 
-  const hasRealData = Object.keys(realData).length > 0
+  const hasRealData = Object.keys(realData).some(k => k !== '__coins')
 
-  const mathProgress = mathLessons.map((lesson, i) => {
-    const real = hasRealData ? getRealLessonProgress(realData, userClass, 'maths', lesson) : null
-    return { lesson, ...(real ?? getLessonProgress(student.mathScore, i, mathLessons.length)) }
-  })
-  const engProgress = engLessons.map((lesson, i) => {
-    const real = hasRealData ? getRealLessonProgress(realData, userClass, 'english', lesson) : null
-    return { lesson, ...(real ?? getLessonProgress(student.engScore, i, engLessons.length)) }
+  // Build progress for every subject in the class dynamically
+  const subjProgress = {}
+  classSubjects.forEach(subj => {
+    const lessons = LESSON_MAP[userClass][subj] || []
+    const fallbackScore = subj === 'maths' ? student.mathScore : subj === 'english' ? student.engScore : 0
+    subjProgress[subj] = lessons.map((lesson, i) => {
+      const real = hasRealData ? getRealLessonProgress(realData, userClass, subj, lesson) : null
+      return { lesson, ...(real ?? getLessonProgress(fallbackScore, i, lessons.length)) }
+    })
   })
 
-  const inProgress = [
-    ...mathProgress.filter(l => l.pct > 0 && l.pct < 100).map(l => ({ ...l, subject: 'Maths',   color: '#FF8A00' })),
-    ...engProgress.filter(l  => l.pct > 0 && l.pct < 100).map(l => ({ ...l, subject: 'English', color: '#1E88E5' })),
-  ]
-  const notStarted = [
-    ...mathProgress.filter(l => l.pct === 0).map(l => ({ ...l, subject: 'Maths' })),
-    ...engProgress.filter(l  => l.pct === 0).map(l => ({ ...l, subject: 'English' })),
-  ]
-  const mathDone = mathProgress.filter(l => l.pct === 100).length
-  const engDone  = engProgress.filter(l  => l.pct === 100).length
+  const inProgress = classSubjects.flatMap(subj => {
+    const cfg = SUBJ_CFG[subj] || { label: subj, col: '#555' }
+    return (subjProgress[subj] || [])
+      .filter(l => l.pct > 0 && l.pct < 100)
+      .map(l => ({ ...l, subject: cfg.label, color: cfg.col }))
+  })
+  const notStarted = classSubjects.flatMap(subj => {
+    const cfg = SUBJ_CFG[subj] || { label: subj, col: '#555' }
+    return (subjProgress[subj] || [])
+      .filter(l => l.pct === 0)
+      .map(l => ({ ...l, subject: cfg.label }))
+  })
+
+  const totalDone   = classSubjects.reduce((sum, subj) => sum + (subjProgress[subj] || []).filter(l => l.pct === 100).length, 0)
+  const totalLessons = classSubjects.reduce((sum, subj) => sum + (LESSON_MAP[userClass][subj] || []).length, 0)
+
+  // Banner stats: first two subjects for % display
+  const bannerSubjects = classSubjects.slice(0, 2)
 
   const STATUS_PILL = { excellent: 'bg-green-100 text-green-700', good: 'bg-blue-100 text-blue-700', attention: 'bg-red-100 text-red-700' }
 
@@ -468,18 +486,26 @@ function StudentDetailView({ student, userClass, onBack }) {
             {full.bloodGroup && <span>🩸 {full.bloodGroup}</span>}
           </div>
         </div>
-        <div className="flex gap-6 flex-shrink-0">
-          {[
-            { val: `${student.mathScore}%`,  lbl: 'Maths',       col: '#FF8A00' },
-            { val: `${student.engScore}%`,   lbl: 'English',     col: '#1E88E5' },
-            { val: `${student.attendance}%`, lbl: 'Attendance',  col: '#28B463' },
-            { val: `${mathDone + engDone}/${mathLessons.length + engLessons.length}`, lbl: 'Lessons Done', col: '#8E44AD' },
-          ].map((s, i) => (
-            <div key={i} className="text-center">
-              <div className="font-display text-xl leading-none" style={{ color: s.col }}>{s.val}</div>
-              <div className="text-[10px] text-gray-400 mt-0.5">{s.lbl}</div>
-            </div>
-          ))}
+        <div className="flex gap-4 flex-shrink-0 flex-wrap justify-end">
+          {bannerSubjects.map(subj => {
+            const cfg = SUBJ_CFG[subj] || { label: subj, col: '#555' }
+            const prog = subjProgress[subj] || []
+            const avgPct = prog.length > 0 ? Math.round(prog.reduce((s, l) => s + l.pct, 0) / prog.length) : 0
+            return (
+              <div key={subj} className="text-center">
+                <div className="font-display text-xl leading-none" style={{ color: cfg.col }}>{avgPct}%</div>
+                <div className="text-[10px] text-gray-400 mt-0.5">{cfg.label}</div>
+              </div>
+            )
+          })}
+          <div className="text-center">
+            <div className="font-display text-xl leading-none" style={{ color: '#28B463' }}>{student.attendance}%</div>
+            <div className="text-[10px] text-gray-400 mt-0.5">Attendance</div>
+          </div>
+          <div className="text-center">
+            <div className="font-display text-xl leading-none" style={{ color: '#8E44AD' }}>{totalDone}/{totalLessons}</div>
+            <div className="text-[10px] text-gray-400 mt-0.5">Lessons Done</div>
+          </div>
         </div>
       </div>
 
@@ -487,8 +513,14 @@ function StudentDetailView({ student, userClass, onBack }) {
       <div className="grid grid-cols-3 gap-4">
         {/* Lesson progress — spans 2 cols */}
         <div className="col-span-2 space-y-4">
-          <SubjectProgress label="Maths"   icon="🐿️" color="#FF8A00" score={student.mathScore} lessons={mathProgress} />
-          <SubjectProgress label="English" icon="🐦" color="#1E88E5" score={student.engScore}  lessons={engProgress}  />
+          {classSubjects.map(subj => {
+            const cfg = SUBJ_CFG[subj] || { label: subj, icon: '📚', col: '#555' }
+            return (
+              <SubjectProgress key={subj} label={cfg.label} icon={cfg.icon} color={cfg.col}
+                score={subj === 'maths' ? student.mathScore : subj === 'english' ? student.engScore : 0}
+                lessons={subjProgress[subj] || []} />
+            )
+          })}
         </div>
 
         {/* Right sidebar */}
@@ -542,20 +574,23 @@ function StudentDetailView({ student, userClass, onBack }) {
           {/* Completion summary */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
             <h4 className="font-display text-sm text-gray-700 mb-3">📊 Completion</h4>
-            {[
-              { label: 'Maths',   done: mathDone, total: mathLessons.length, color: '#FF8A00' },
-              { label: 'English', done: engDone,  total: engLessons.length,  color: '#1E88E5' },
-            ].map((r, i) => (
-              <div key={i} className="mb-3">
-                <div className="flex justify-between text-[10px] font-semibold text-gray-500 mb-1">
-                  <span>{r.label}</span>
-                  <span style={{ color: r.color }}>{r.done}/{r.total} lessons</span>
+            {classSubjects.map(subj => {
+              const cfg   = SUBJ_CFG[subj] || { label: subj, col: '#555' }
+              const prog  = subjProgress[subj] || []
+              const done  = prog.filter(l => l.pct === 100).length
+              const total = prog.length
+              return (
+                <div key={subj} className="mb-3">
+                  <div className="flex justify-between text-[10px] font-semibold text-gray-500 mb-1">
+                    <span>{cfg.icon} {cfg.label}</span>
+                    <span style={{ color: cfg.col }}>{done}/{total} lessons</span>
+                  </div>
+                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                    <div className="h-2 rounded-full" style={{ width: `${total ? (done/total)*100 : 0}%`, background: cfg.col }} />
+                  </div>
                 </div>
-                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                  <div className="h-2 rounded-full" style={{ width: `${r.total ? (r.done/r.total)*100 : 0}%`, background: r.color }} />
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       </div>
@@ -567,7 +602,45 @@ function StudentDetailView({ student, userClass, onBack }) {
 function StudentsTab({ students = [], userClass = 1 }) {
   const [search,          setSearch]          = useState('')
   const [selectedStudent, setSelectedStudent] = useState(null)
+  const [lessonPcts,      setLessonPcts]      = useState({})
   const filtered = students.filter(s => s.name.toLowerCase().includes(search.toLowerCase()))
+
+  useEffect(() => {
+    if (students.length === 0) return
+    const mathLessons = LESSON_MAP[userClass]?.maths   || []
+    const engLessons  = LESSON_MAP[userClass]?.english || []
+
+    // One bulk read instead of N individual reads
+    getAllProgressFS()
+      .then(allProgress => {
+        const map = {}
+        students.forEach(s => {
+          const raw = allProgress[s.id] || {}
+          // Strip __coins so it doesn't interfere with lesson key lookups
+          const { __coins: _c, ...progData } = raw
+          const hasData = Object.keys(progData).length > 0 ||
+            (() => { try { return Object.keys(JSON.parse(localStorage.getItem(`chikko_quiz_v1_${s.id}`) || '{}')).length > 0 } catch { return false } })()
+          const data = hasData && Object.keys(progData).length === 0
+            ? (() => { try { return JSON.parse(localStorage.getItem(`chikko_quiz_v1_${s.id}`) || '{}') } catch { return {} } })()
+            : progData
+
+          const mathPcts = mathLessons.map((lesson, i) => {
+            const prog = Object.keys(data).length > 0 ? getRealLessonProgress(data, userClass, 'maths', lesson) : null
+            return (prog ?? getLessonProgress(s.mathScore, i, mathLessons.length)).pct
+          })
+          const engPcts = engLessons.map((lesson, i) => {
+            const prog = Object.keys(data).length > 0 ? getRealLessonProgress(data, userClass, 'english', lesson) : null
+            return (prog ?? getLessonProgress(s.engScore, i, engLessons.length)).pct
+          })
+          map[s.id] = {
+            mathPct: mathPcts.length > 0 ? Math.round(mathPcts.reduce((a, b) => a + b, 0) / mathPcts.length) : 0,
+            engPct:  engPcts.length  > 0 ? Math.round(engPcts.reduce((a, b) => a + b, 0) / engPcts.length)  : 0,
+          }
+        })
+        setLessonPcts(map)
+      })
+      .catch(() => {}) // offline graceful
+  }, [students, userClass])
 
   if (selectedStudent) {
     return <StudentDetailView student={selectedStudent} userClass={userClass} onBack={() => setSelectedStudent(null)} />
@@ -594,41 +667,45 @@ function StudentsTab({ students = [], userClass = 1 }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {filtered.map(s => (
-              <tr key={s.id} className="hover:bg-gray-50 transition-colors">
-                <td className="py-3 px-4">
-                  <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center text-[10px] font-bold text-blue-600">
-                      {s.name.split(' ').map(n=>n[0]).join('')}
+            {filtered.map(s => {
+              const mathPct = lessonPcts[s.id]?.mathPct ?? s.mathScore
+              const engPct  = lessonPcts[s.id]?.engPct  ?? s.engScore
+              return (
+                <tr key={s.id} className="hover:bg-gray-50 transition-colors">
+                  <td className="py-3 px-4">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center text-[10px] font-bold text-blue-600">
+                        {s.name.split(' ').map(n=>n[0]).join('')}
+                      </div>
+                      <span className="font-semibold text-gray-700 text-xs">{s.name}</span>
                     </div>
-                    <span className="font-semibold text-gray-700 text-xs">{s.name}</span>
-                  </div>
-                </td>
-                <td className="py-3 px-4">
-                  <div className="flex items-center gap-1.5">
-                    <div className="h-1.5 w-14 bg-gray-100 rounded-full overflow-hidden"><div className="h-1.5 rounded-full bg-brand-orange" style={{ width: `${s.mathScore}%` }} /></div>
-                    <span className="text-[10px] font-bold text-gray-600">{s.mathScore}%</span>
-                  </div>
-                </td>
-                <td className="py-3 px-4">
-                  <div className="flex items-center gap-1.5">
-                    <div className="h-1.5 w-14 bg-gray-100 rounded-full overflow-hidden"><div className="h-1.5 rounded-full bg-brand-blue" style={{ width: `${s.engScore}%` }} /></div>
-                    <span className="text-[10px] font-bold text-gray-600">{s.engScore}%</span>
-                  </div>
-                </td>
-                <td className="py-3 px-4 text-[10px] text-gray-400">{s.lastActive}</td>
-                <td className="py-3 px-4">
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${STATUS[s.status]}`}>{s.status}</span>
-                </td>
-                <td className="py-3 px-4">
-                  <button
-                    onClick={() => setSelectedStudent(s)}
-                    className="text-[10px] text-brand-blue font-bold hover:underline hover:text-blue-700 transition-colors">
-                    View →
-                  </button>
-                </td>
-              </tr>
-            ))}
+                  </td>
+                  <td className="py-3 px-4">
+                    <div className="flex items-center gap-1.5">
+                      <div className="h-1.5 w-14 bg-gray-100 rounded-full overflow-hidden"><div className="h-1.5 rounded-full bg-brand-orange" style={{ width: `${mathPct}%` }} /></div>
+                      <span className="text-[10px] font-bold text-gray-600">{mathPct}%</span>
+                    </div>
+                  </td>
+                  <td className="py-3 px-4">
+                    <div className="flex items-center gap-1.5">
+                      <div className="h-1.5 w-14 bg-gray-100 rounded-full overflow-hidden"><div className="h-1.5 rounded-full bg-brand-blue" style={{ width: `${engPct}%` }} /></div>
+                      <span className="text-[10px] font-bold text-gray-600">{engPct}%</span>
+                    </div>
+                  </td>
+                  <td className="py-3 px-4 text-[10px] text-gray-400">{s.lastActive}</td>
+                  <td className="py-3 px-4">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${STATUS[s.status]}`}>{s.status}</span>
+                  </td>
+                  <td className="py-3 px-4">
+                    <button
+                      onClick={() => setSelectedStudent(s)}
+                      className="text-[10px] text-brand-blue font-bold hover:underline hover:text-blue-700 transition-colors">
+                      View →
+                    </button>
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
