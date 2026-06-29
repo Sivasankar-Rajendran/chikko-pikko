@@ -515,14 +515,7 @@ export default function HeadmasterDashboard() {
           getAllStaffFS(),
           getClassAssignmentsFS(),
         ])
-        // If local arrays are empty but Firestore still has old seeded data, clear it
-        const clearOps = []
-        if (ALL_STUDENTS.length === 0 && fsStudents.length > 0) clearOps.push(deleteAllStudentsFS())
-        if (ALL_STAFF.length   === 0 && fsStaff.length   > 0) clearOps.push(deleteAllStaffFS())
-        if (clearOps.length) await Promise.all(clearOps)
-
-        setStudents(ALL_STUDENTS.length === 0 && fsStudents.length > 0 ? [] : (fsStudents.length ? fsStudents : []))
-        setStaffList(ALL_STAFF.length   === 0 && fsStaff.length   > 0 ? [] : (fsStaff.length   ? fsStaff   : []))
+        setStudents(fsStudents)
         setStaffList(fsStaff.length ? fsStaff : ALL_STAFF)
         setAssignments(fsAssignments || DEFAULT_CLASS_ASSIGNMENTS)
       } catch (err) {
