@@ -11,7 +11,9 @@ import {
   saveClassAssignmentsFS, saveStudentFS, updateStudentFS,
   deleteStudentFS, saveStaffFS, deleteStaffFS,
   seedDatabase, isSeeded, deleteAllStudentsFS, deleteAllStaffFS,
+  getAllProgressFS,
 } from '../../services/firestore'
+import { LESSON_MAP } from '../../data/questions'
 
 /* ── Custom dropdown (preserves app font in option list) ─── */
 function CustomSelect({ value, onChange, options, disabled, tight }) {
@@ -473,6 +475,411 @@ function EditStaffModal({ staff, onSave, onClose, existingEmis }) {
   )
 }
 
+/* ── Reports Tab ─────────────────────────────────────────── */
+const DIFFS      = ['easy', 'medium', 'hard']
+const SUBJ_LABEL = { maths: 'Maths', english: 'English', physics: 'Physics', chemistry: 'Chemistry' }
+const SUBJ_ICON  = { maths: '📐', english: '📚', physics: '⚛️', chemistry: '🧪' }
+const SUBJ_CLR   = {
+  maths:     { bar: 'bg-blue-500'   },
+  english:   { bar: 'bg-purple-500' },
+  physics:   { bar: 'bg-orange-500' },
+  chemistry: { bar: 'bg-green-500'  },
+}
+function clrPct(p) { return p >= 70 ? 'text-green-600' : p >= 40 ? 'text-amber-600' : 'text-red-500' }
+function barClr(p) { return p >= 70 ? 'bg-green-500'   : p >= 40 ? 'bg-amber-400'   : 'bg-red-400'   }
+
+function ReportsTab({ students, staffList, assignments, allProgress }) {
+  const todayStr   = new Date().toISOString().slice(0, 10)
+  const oneWkAgo   = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10)
+
+  // Enrich every student with progress metrics
+  const enriched = students.map(s => {
+    const cls     = parseInt(s.class)
+    const classSubj = LESSON_MAP[cls] || {}
+    const subjects  = Object.keys(classSubj)
+    let totalDiffs = 0, completedDiffs = 0
+    const subjPcts = {}
+    subjects.forEach(subj => {
+      const lessons = classSubj[subj] || []
+      let sd = 0, sc = 0
+      lessons.forEach(les => {
+        const lp = (allProgress[s.id] || {})[`${cls}__${subj}__${les}`] || {}
+        sd += 3
+        sc += DIFFS.filter(d => lp[d]?.status === 'completed').length
+      })
+      totalDiffs += sd; completedDiffs += sc
+      subjPcts[subj] = sd > 0 ? Math.round(sc / sd * 100) : 0
+    })
+    const overallPct = totalDiffs > 0 ? Math.round(completedDiffs / totalDiffs * 100) : 0
+    const prog       = allProgress[s.id] || {}
+    const streak     = prog.__streak      || 0
+    const badges     = prog.__badges      || 0
+    const coins      = prog.__coins       || 0
+    const streakDate = prog.__streakDate  || ''
+    const isActiveToday    = streakDate === todayStr
+    const isActiveThisWeek = streakDate >= oneWkAgo && streakDate !== ''
+    return { ...s, cls, subjects, subjPcts, overallPct, streak, badges, coins, streakDate, isActiveToday, isActiveThisWeek }
+  })
+
+  // Pulse metrics
+  const activeToday    = enriched.filter(s => s.isActiveToday).length
+  const activeWeek     = enriched.filter(s => s.isActiveThisWeek).length
+  const avgProgress    = students.length ? Math.round(enriched.reduce((a, s) => a + s.overallPct, 0) / students.length) : 0
+  const totalBadges    = enriched.reduce((a, s) => a + s.badges, 0)
+  const totalStreakSum  = enriched.reduce((a, s) => a + s.streak, 0)
+  const pct = v => students.length ? Math.round(v / students.length * 100) : 0
+
+  // Class performance
+  const classMap = {}
+  enriched.forEach(s => {
+    const c = s.class.replace(/[A-Za-z]/g, '')
+    if (!classMap[c]) classMap[c] = { total: 0, count: 0, activeToday: 0, activeWeek: 0, subjTotals: {}, subjCounts: {} }
+    classMap[c].total += s.overallPct; classMap[c].count++
+    if (s.isActiveToday)    classMap[c].activeToday++
+    if (s.isActiveThisWeek) classMap[c].activeWeek++
+    s.subjects.forEach(subj => {
+      classMap[c].subjTotals[subj] = (classMap[c].subjTotals[subj] || 0) + s.subjPcts[subj]
+      classMap[c].subjCounts[subj] = (classMap[c].subjCounts[subj] || 0) + 1
+    })
+  })
+  const classPerfList = Object.entries(classMap)
+    .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
+    .map(([c, d]) => {
+      const avgPct    = d.count > 0 ? Math.round(d.total / d.count) : 0
+      const subjAvgs  = Object.entries(d.subjTotals).map(([subj, tot]) => ({ subj, avg: Math.round(tot / (d.subjCounts[subj] || 1)) }))
+      const weakest   = [...subjAvgs].sort((a, b) => a.avg - b.avg)[0]?.subj  || '—'
+      const strongest = [...subjAvgs].sort((a, b) => b.avg - a.avg)[0]?.subj  || '—'
+      return { cls: c, ...d, avgPct, weakest, strongest }
+    })
+
+  // Subject performance
+  const subjMap = {}
+  enriched.forEach(s => s.subjects.forEach(subj => {
+    if (!subjMap[subj]) subjMap[subj] = { total: 0, count: 0 }
+    subjMap[subj].total += s.subjPcts[subj]; subjMap[subj].count++
+  }))
+  const subjPerfList = Object.entries(subjMap)
+    .map(([subj, d]) => ({ subj, avg: d.count > 0 ? Math.round(d.total / d.count) : 0 }))
+    .sort((a, b) => b.avg - a.avg)
+
+  // Leaderboards
+  const topStudents  = [...enriched].sort((a, b) => b.overallPct - a.overallPct).slice(0, 8)
+  const streakChamps = [...enriched].filter(s => s.streak > 0).sort((a, b) => b.streak - a.streak).slice(0, 5)
+  const badgeChamps  = [...enriched].filter(s => s.badges  > 0).sort((a, b) => b.badges  - a.badges).slice(0, 5)
+  const needAttn     = [...enriched].filter(s => s.overallPct < 30 || !s.isActiveThisWeek)
+    .sort((a, b) => a.overallPct - b.overallPct).slice(0, 6)
+
+  // Enrollment distribution
+  const enrollMap = {}
+  students.forEach(s => { const c = s.class.replace(/[A-Za-z]/g, ''); enrollMap[c] = (enrollMap[c] || 0) + 1 })
+  const maxEnroll = Math.max(...Object.values(enrollMap), 1)
+  const enrollList = Object.entries(enrollMap).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
+
+  // Gender distribution
+  const genderMap = {}
+  students.forEach(s => { genderMap[s.gender] = (genderMap[s.gender] || 0) + 1 })
+  const GENDER_CFG = {
+    Male:        { icon: '👦', bg: 'bg-blue-50',   text: 'text-blue-600'   },
+    Female:      { icon: '👧', bg: 'bg-pink-50',   text: 'text-pink-600'   },
+    Transgender: { icon: '🧑', bg: 'bg-purple-50', text: 'text-purple-600' },
+  }
+
+  const RANK_EMOJI = ['🥇','🥈','🥉','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣']
+
+  return (
+    <div className="max-w-6xl mx-auto px-6 py-8 space-y-8">
+
+      {/* School Pulse */}
+      <section>
+        <h2 className="text-base font-display font-bold text-gray-700 mb-3 uppercase tracking-wide">School Pulse</h2>
+        <div className="grid grid-cols-6 gap-3">
+          {[
+            { icon: '🎒', label: 'Total Students', value: students.length, sub: `${classPerfList.length} classes`, clr: 'text-slate-700' },
+            { icon: '✅', label: 'Active Today',    value: activeToday,     sub: `${pct(activeToday)}% of students`,  clr: 'text-green-600' },
+            { icon: '📅', label: 'Active This Week',value: activeWeek,      sub: `${pct(activeWeek)}% of students`,   clr: 'text-blue-600'  },
+            { icon: '📊', label: 'Avg Progress',    value: `${avgProgress}%`, sub: 'across all subjects',             clr: clrPct(avgProgress) },
+            { icon: '🏆', label: 'Badges Earned',   value: totalBadges,     sub: 'school-wide total',                 clr: 'text-amber-600' },
+            { icon: '🔥', label: 'Total Streaks',   value: totalStreakSum,  sub: 'cumulative days',                   clr: 'text-orange-600'},
+          ].map(c => (
+            <div key={c.label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+              <div className="text-2xl mb-1">{c.icon}</div>
+              <div className={`text-2xl font-display font-bold ${c.clr}`}>{c.value}</div>
+              <div className="text-[11px] font-bold text-gray-600 mt-0.5">{c.label}</div>
+              <div className="text-[11px] text-gray-400 mt-0.5">{c.sub}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Class Performance + Subject Performance */}
+      <div className="grid grid-cols-2 gap-6">
+
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-indigo-50 to-blue-50">
+            <h3 className="font-display font-bold text-gray-800">Class Performance</h3>
+            <p className="text-xs text-gray-400 mt-0.5">Avg progress per standard</p>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {classPerfList.length === 0
+              ? <div className="px-5 py-6 text-center text-sm text-gray-400">No data yet</div>
+              : classPerfList.map(c => (
+              <div key={c.cls} className="px-5 py-3 flex items-center gap-4">
+                <div className="w-9 h-9 rounded-xl bg-indigo-100 flex items-center justify-center flex-shrink-0">
+                  <span className="text-sm font-display font-bold text-indigo-700">{c.cls}</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-bold text-gray-700">Std {c.cls}</span>
+                    <span className={`text-sm font-bold ${clrPct(c.avgPct)}`}>{c.avgPct}%</span>
+                  </div>
+                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full ${barClr(c.avgPct)}`} style={{ width: `${c.avgPct}%` }} />
+                  </div>
+                </div>
+                <div className="text-right text-[11px] text-gray-400 flex-shrink-0">
+                  <div>{c.count} students</div>
+                  <div>{c.activeToday} today</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-purple-50 to-pink-50">
+            <h3 className="font-display font-bold text-gray-800">Subject Performance</h3>
+            <p className="text-xs text-gray-400 mt-0.5">School-wide avg per subject</p>
+          </div>
+          <div className="p-5 space-y-5">
+            {subjPerfList.length === 0
+              ? <div className="text-center text-sm text-gray-400 py-4">No data yet</div>
+              : subjPerfList.map(({ subj, avg }) => {
+              const bar = SUBJ_CLR[subj]?.bar || 'bg-gray-400'
+              return (
+                <div key={subj}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">{SUBJ_ICON[subj] || '📖'}</span>
+                      <span className="text-sm font-bold text-gray-700">{SUBJ_LABEL[subj] || subj}</span>
+                    </div>
+                    <span className={`text-sm font-bold ${clrPct(avg)}`}>{avg}%</span>
+                  </div>
+                  <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full ${bar}`} style={{ width: `${avg}%` }} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Enrollment by Class */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-amber-50 to-orange-50">
+          <h3 className="font-display font-bold text-gray-800">Enrollment by Class</h3>
+          <p className="text-xs text-gray-400 mt-0.5">Number of students per standard</p>
+        </div>
+        <div className="p-5 grid grid-cols-2 gap-x-8 gap-y-2">
+          {enrollList.map(([cls, count]) => (
+            <div key={cls} className="flex items-center gap-3">
+              <div className="w-10 text-xs font-bold text-gray-500 text-right flex-shrink-0">Std {cls}</div>
+              <div className="flex-1 h-7 bg-gray-100 rounded-lg overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-amber-400 to-orange-400 rounded-lg flex items-center pl-3"
+                  style={{ width: `${Math.max(6, Math.round(count / maxEnroll * 100))}%` }}>
+                  <span className="text-xs font-bold text-white">{count}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Top Students + Needs Attention */}
+      <div className="grid grid-cols-2 gap-6">
+
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-yellow-50 to-amber-50">
+            <h3 className="font-display font-bold text-gray-800">Top Students</h3>
+            <p className="text-xs text-gray-400 mt-0.5">School-wide leaderboard</p>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {topStudents.length === 0
+              ? <div className="px-5 py-6 text-center text-sm text-gray-400">No data yet</div>
+              : topStudents.map((s, i) => (
+              <div key={s.id} className="px-5 py-3 flex items-center gap-3">
+                <span className="text-lg flex-shrink-0">{RANK_EMOJI[i] || `${i+1}`}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-bold text-gray-800 truncate">{s.name}</div>
+                  <div className="text-xs text-gray-400">Std {s.class} · 🏆{s.badges} 🔥{s.streak}</div>
+                </div>
+                <span className={`text-sm font-bold ${clrPct(s.overallPct)}`}>{s.overallPct}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-red-50 to-rose-50">
+            <h3 className="font-display font-bold text-gray-800">Needs Attention</h3>
+            <p className="text-xs text-gray-400 mt-0.5">Low progress or inactive this week</p>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {needAttn.length === 0
+              ? <div className="px-5 py-6 text-center text-sm text-gray-400">All students on track!</div>
+              : needAttn.map(s => (
+              <div key={s.id} className="px-5 py-3 flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-red-100 flex items-center justify-center flex-shrink-0 text-base">🎒</div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-bold text-gray-800 truncate">{s.name}</div>
+                  <div className="text-xs text-gray-400">Std {s.class} · {s.isActiveThisWeek ? 'Active' : 'Inactive this week'}</div>
+                </div>
+                <span className={`text-sm font-bold ${clrPct(s.overallPct)}`}>{s.overallPct}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Streak & Badge Champions */}
+      <div className="grid grid-cols-2 gap-6">
+
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-orange-50 to-red-50">
+            <h3 className="font-display font-bold text-gray-800">Streak Champions</h3>
+            <p className="text-xs text-gray-400 mt-0.5">Longest daily learning streaks</p>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {streakChamps.length === 0
+              ? <div className="px-5 py-6 text-center text-sm text-gray-400">No streak data yet</div>
+              : streakChamps.map((s, i) => (
+              <div key={s.id} className="px-5 py-3 flex items-center gap-3">
+                <span className="text-xl flex-shrink-0">{RANK_EMOJI[i]}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-bold text-gray-800 truncate">{s.name}</div>
+                  <div className="text-xs text-gray-400">Std {s.class}</div>
+                </div>
+                <span className="text-orange-600 font-bold text-sm">🔥 {s.streak} days</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-yellow-50 to-amber-50">
+            <h3 className="font-display font-bold text-gray-800">Badge Champions</h3>
+            <p className="text-xs text-gray-400 mt-0.5">Most perfect-score badges earned</p>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {badgeChamps.length === 0
+              ? <div className="px-5 py-6 text-center text-sm text-gray-400">No badge data yet</div>
+              : badgeChamps.map((s, i) => (
+              <div key={s.id} className="px-5 py-3 flex items-center gap-3">
+                <span className="text-xl flex-shrink-0">{RANK_EMOJI[i]}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-bold text-gray-800 truncate">{s.name}</div>
+                  <div className="text-xs text-gray-400">Std {s.class}</div>
+                </div>
+                <span className="text-amber-600 font-bold text-sm">🏆 {s.badges} badges</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Class-wise detailed breakdown */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-teal-50 to-cyan-50">
+          <h3 className="font-display font-bold text-gray-800">Class-wise Breakdown</h3>
+          <p className="text-xs text-gray-400 mt-0.5">Per-class metrics with strongest and weakest subjects</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-100 text-[11px] font-bold text-gray-400 uppercase tracking-wide">
+                <th className="px-5 py-3 text-left">Class</th>
+                <th className="px-4 py-3 text-right">Students</th>
+                <th className="px-4 py-3 text-right">Active Today</th>
+                <th className="px-4 py-3 text-right">Active Week</th>
+                <th className="px-4 py-3 text-right">Avg Progress</th>
+                <th className="px-4 py-3 text-left">Strongest</th>
+                <th className="px-4 py-3 text-left">Weakest</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {classPerfList.length === 0 ? (
+                <tr><td colSpan={7} className="px-5 py-6 text-center text-gray-400">No data yet</td></tr>
+              ) : classPerfList.map(c => (
+                <tr key={c.cls} className="hover:bg-gray-50/60 transition-colors">
+                  <td className="px-5 py-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-xl bg-indigo-100 flex items-center justify-center">
+                        <span className="text-xs font-bold text-indigo-700">{c.cls}</span>
+                      </div>
+                      <span className="font-bold text-gray-800">Std {c.cls}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-right font-semibold text-gray-700">{c.count}</td>
+                  <td className="px-4 py-3 text-right">
+                    <span className={`font-bold ${c.activeToday > 0 ? 'text-green-600' : 'text-gray-400'}`}>{c.activeToday}</span>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <span className={`font-bold ${c.activeWeek > 0 ? 'text-blue-600' : 'text-gray-400'}`}>{c.activeWeek}</span>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <span className={`font-bold ${clrPct(c.avgPct)}`}>{c.avgPct}%</span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {c.strongest !== '—' && (
+                      <span className="flex items-center gap-1 text-xs font-semibold text-green-700">
+                        {SUBJ_ICON[c.strongest]} {SUBJ_LABEL[c.strongest] || c.strongest}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {c.weakest !== '—' && (
+                      <span className="flex items-center gap-1 text-xs font-semibold text-red-600">
+                        {SUBJ_ICON[c.weakest]} {SUBJ_LABEL[c.weakest] || c.weakest}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Gender Distribution */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-slate-50 to-gray-50">
+          <h3 className="font-display font-bold text-gray-800">Gender Distribution</h3>
+          <p className="text-xs text-gray-400 mt-0.5">Across all enrolled students</p>
+        </div>
+        <div className="p-5 flex flex-wrap gap-4">
+          {Object.keys(genderMap).length === 0
+            ? <div className="text-sm text-gray-400">No student data</div>
+            : Object.entries(genderMap).map(([g, count]) => {
+              const cfg = GENDER_CFG[g] || { icon: '🧑', bg: 'bg-gray-50', text: 'text-gray-700' }
+              return (
+                <div key={g} className={`flex items-center gap-4 px-6 py-4 rounded-2xl ${cfg.bg} flex-1 min-w-[140px]`}>
+                  <div className="text-4xl">{cfg.icon}</div>
+                  <div>
+                    <div className={`text-3xl font-display font-bold ${cfg.text}`}>{count}</div>
+                    <div className={`text-sm font-semibold ${cfg.text} opacity-70`}>{g}</div>
+                    <div className="text-xs text-gray-500">{pct(count)}% of total</div>
+                  </div>
+                </div>
+              )
+            })}
+        </div>
+      </div>
+
+    </div>
+  )
+}
+
 /* ── Main Dashboard ──────────────────────────────────────── */
 export default function HeadmasterDashboard() {
   // ── all hooks first ──
@@ -496,6 +903,9 @@ export default function HeadmasterDashboard() {
   const [uploadResults,   setUploadResults]   = useState(null)
   const [dbLoading,       setDbLoading]       = useState(true)
   const [seeding,         setSeeding]         = useState(false)
+  const [activeTab,       setActiveTab]       = useState('management')
+  const [allProgress,     setAllProgress]     = useState(null)
+  const [reportsLoading,  setReportsLoading]  = useState(false)
   const uploadRef = useRef()
 
   // Load all data from Firestore on mount
@@ -529,6 +939,15 @@ export default function HeadmasterDashboard() {
     }
     loadAll()
   }, [])
+
+  // Lazy-load all progress data when Reports tab is first opened
+  useEffect(() => {
+    if (activeTab !== 'reports' || allProgress !== null || reportsLoading) return
+    setReportsLoading(true)
+    getAllProgressFS()
+      .then(data => { setAllProgress(data); setReportsLoading(false) })
+      .catch(() => { setAllProgress({}); setReportsLoading(false) })
+  }, [activeTab, allProgress, reportsLoading])
 
   // ── derived values ──
   const staffById = Object.fromEntries(staffList.map(s => [s.id, s]))
@@ -837,7 +1256,16 @@ export default function HeadmasterDashboard() {
             <p className="text-xs text-gray-400">{SCHOOL.block} Block · {SCHOOL.district} · <span className="font-semibold text-gray-500">{user?.name}</span></p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4">
+          {/* Tab switcher */}
+          <div className="flex gap-1 bg-gray-100 rounded-xl p-1">
+            {[['management','🏫 Management'],['reports','📊 Reports']].map(([t, l]) => (
+              <button key={t} onClick={() => setActiveTab(t)}
+                className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${
+                  activeTab === t ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-400 hover:text-gray-600'
+                }`}>{l}</button>
+            ))}
+          </div>
           {savedMsg && (
             <span className="text-xs font-bold text-green-700 bg-green-50 border border-green-200 px-3 py-1.5 rounded-full animate-pulse">
               ✓ {savedMsg}
@@ -850,7 +1278,28 @@ export default function HeadmasterDashboard() {
         </div>
       </div>
 
-      <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+      {/* Reports tab */}
+      {activeTab === 'reports' && (
+        reportsLoading ? (
+          <div className="flex items-center justify-center py-20">
+            <div className="text-center">
+              <div className="text-5xl mb-4 animate-pulse">📊</div>
+              <div className="font-display text-lg text-gray-700">Loading reports…</div>
+              <div className="text-sm text-gray-400 mt-1">Fetching student progress from Firebase</div>
+            </div>
+          </div>
+        ) : (
+          <ReportsTab
+            students={students}
+            staffList={staffList}
+            assignments={assignments}
+            allProgress={allProgress || {}}
+          />
+        )
+      )}
+
+      {/* Management tab */}
+      {activeTab === 'management' && <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
 
         {/* Summary */}
         <div className="grid grid-cols-4 gap-4">
@@ -1248,7 +1697,7 @@ export default function HeadmasterDashboard() {
           </>}
         </div>
 
-      </div>{/* end max-w-5xl */}
+      </div>}{/* end management tab / max-w-5xl */}
 
       {/* Assignment modal */}
       {modalClass && (
