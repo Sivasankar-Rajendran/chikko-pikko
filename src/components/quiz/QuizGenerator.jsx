@@ -2,15 +2,71 @@ import { useState, useRef } from 'react'
 import { LESSON_MAP, getQuestions } from '../../data/questions/index'
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Tap-to-match component for q.type === 'match' questions
+   Drag-and-drop match component for q.type === 'match' questions
    Pair format: [{ left: string, right: string }, ...]
+   Supports HTML5 drag-and-drop (desktop) + tap-to-select (mobile)
    Calls onAnswer('__match_correct__') or onAnswer('__match_wrong__')
 ────────────────────────────────────────────────────────────────────────── */
 function MatchQuestion({ pairs, onAnswer, showFb }) {
   const [pool, setPool]       = useState(() => [...pairs.map(p => p.right)].sort(() => Math.random() - 0.5))
   const [slots, setSlots]     = useState(() => Object.fromEntries(pairs.map(p => [p.left, null])))
-  const [selChip, setSelChip] = useState(null)
+  const [selChip, setSelChip] = useState(null)   // tap-mode selected chip
+  const [dragOver, setDragOver] = useState(null) // which slot is being hovered
+  const dragRef = useRef(null) // { chip, from: 'pool'|'slot', leftItem? }
 
+  /* ── Drag from pool ── */
+  function onDragStartPool(chip) {
+    dragRef.current = { chip, from: 'pool' }
+    setSelChip(null)
+  }
+
+  /* ── Drag from an already-placed slot ── */
+  function onDragStartSlot(chip, leftItem) {
+    dragRef.current = { chip, from: 'slot', leftItem }
+    setSelChip(null)
+  }
+
+  /* ── Drop onto a row slot ── */
+  function onDropSlot(e, targetLeft) {
+    e.preventDefault()
+    setDragOver(null)
+    if (!dragRef.current || showFb) return
+    const { chip, from, leftItem: srcLeft } = dragRef.current
+    const prevChip = slots[targetLeft]
+
+    setSlots(prev => {
+      const next = { ...prev, [targetLeft]: chip }
+      if (from === 'slot' && srcLeft !== targetLeft) next[srcLeft] = prevChip  // swap
+      return next
+    })
+    if (from === 'pool') {
+      setPool(prev => {
+        const next = prev.filter(c => c !== chip)
+        if (prevChip !== null) next.push(prevChip)
+        return next
+      })
+    } else if (srcLeft === targetLeft) {
+      // dropped onto same slot — no-op
+    } else if (prevChip !== null) {
+      // swapped between two slots — pool unchanged
+    }
+    dragRef.current = null
+  }
+
+  /* ── Drop back onto the pool area (unplace) ── */
+  function onDropPool(e) {
+    e.preventDefault()
+    setDragOver(null)
+    if (!dragRef.current || showFb) return
+    const { chip, from, leftItem: srcLeft } = dragRef.current
+    if (from === 'slot') {
+      setSlots(prev => ({ ...prev, [srcLeft]: null }))
+      setPool(prev => [...prev, chip])
+    }
+    dragRef.current = null
+  }
+
+  /* ── Tap fallback (mobile) ── */
   function tapChip(chip) {
     if (showFb) return
     setSelChip(prev => prev === chip ? null : chip)
@@ -20,9 +76,11 @@ function MatchQuestion({ pairs, onAnswer, showFb }) {
     if (showFb) return
     if (selChip !== null) {
       const prevChip = slots[leftItem]
-      const newPool = pool.filter(c => c !== selChip)
-      if (prevChip !== null) newPool.push(prevChip)
-      setPool(newPool)
+      setPool(prev => {
+        const next = prev.filter(c => c !== selChip)
+        if (prevChip !== null) next.push(prevChip)
+        return next
+      })
       setSlots(prev => ({ ...prev, [leftItem]: selChip }))
       setSelChip(null)
     } else if (slots[leftItem] !== null) {
@@ -40,80 +98,118 @@ function MatchQuestion({ pairs, onAnswer, showFb }) {
   }
 
   return (
-    <div className="mb-3">
-      {/* Chip pool */}
+    <div className="mb-3 select-none">
+
+      {/* ── Draggable block pool ── */}
       {!showFb && (
-        <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 mb-4 min-h-[54px]">
+        <div
+          onDragOver={e => e.preventDefault()}
+          onDrop={onDropPool}
+          className="bg-gray-50 border-2 border-dashed border-gray-300 rounded-2xl p-3 mb-4 min-h-[62px] transition-colors"
+        >
           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
-            Tap a chip to select, then tap a slot to place it
+            Drag blocks → or tap one, then tap a row to place it
           </p>
           <div className="flex flex-wrap gap-2">
             {pool.map((chip, i) => (
-              <button key={i} onClick={() => tapChip(chip)}
-                className={`px-3 py-1.5 rounded-lg text-sm font-semibold border-2 transition-all ${
+              <div
+                key={i}
+                draggable
+                onDragStart={() => onDragStartPool(chip)}
+                onClick={() => tapChip(chip)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-bold border-2 cursor-grab active:cursor-grabbing transition-all shadow-sm ${
                   selChip === chip
-                    ? 'bg-orange-500 text-white border-orange-500 shadow-md scale-105'
-                    : 'bg-white text-gray-700 border-gray-300 hover:border-orange-400'
-                }`}>
+                    ? 'bg-orange-500 text-white border-orange-500 shadow-orange-200 shadow-md scale-105'
+                    : 'bg-white text-gray-700 border-gray-200 hover:border-orange-300 hover:shadow-md'
+                }`}
+              >
+                <span className="text-gray-400 text-xs">⠿</span>
                 {chip}
-              </button>
+              </div>
             ))}
             {pool.length === 0 && (
-              <span className="text-xs text-gray-400 italic">All placed — tap Check Matches below</span>
+              <span className="text-xs text-gray-400 italic py-1">All blocks placed — press Check below</span>
             )}
           </div>
         </div>
       )}
 
-      {/* Pair rows */}
+      {/* ── Pair rows ── */}
       <div className="space-y-2">
         {pairs.map((p, i) => {
           const placed  = slots[p.left]
           const correct = showFb && placed === p.right
           const wrong   = showFb && placed !== p.right
+          const isOver  = dragOver === p.left
+
           return (
-            <div key={i} className={`flex items-center gap-2 p-2.5 rounded-xl border-2 transition-all ${
+            <div key={i} className={`flex items-center gap-2 rounded-2xl border-2 p-2 transition-all ${
               showFb
                 ? correct ? 'border-green-400 bg-green-50' : 'border-red-400 bg-red-50'
+                : isOver  ? 'border-orange-400 bg-orange-50'
                 : 'border-gray-200 bg-white'
             }`}>
-              <div className="flex-1 text-sm font-semibold text-gray-800 min-w-0">{p.left}</div>
-              <span className="text-gray-300 flex-shrink-0 font-bold">→</span>
-              <button onClick={() => tapSlot(p.left)} disabled={showFb}
-                className={`flex-1 min-h-[36px] rounded-lg border-2 border-dashed px-3 py-1.5 text-sm font-semibold text-center transition-all ${
-                  placed
-                    ? showFb
-                      ? correct ? 'bg-green-100 border-green-400 text-green-800'
-                               : 'bg-red-100   border-red-400   text-red-700'
-                      : selChip !== null
-                        ? 'bg-orange-50 border-orange-400 text-gray-700 cursor-pointer'
-                        : 'bg-white border-gray-300 text-gray-700 hover:border-red-300 cursor-pointer'
-                    : selChip !== null
-                      ? 'bg-orange-50 border-orange-400 text-gray-400 cursor-pointer'
-                      : 'border-gray-200 text-gray-300'
-                }`}>
-                {placed || <span className="text-xs">Drop here</span>}
-              </button>
+
+              {/* Left label */}
+              <div className="flex-1 text-sm font-semibold text-gray-800 min-w-0 px-1">{p.left}</div>
+
+              <span className="text-gray-300 flex-shrink-0 text-lg">→</span>
+
+              {/* Drop zone */}
+              <div
+                className="flex-1 min-h-[42px] rounded-xl border-2 border-dashed transition-all"
+                style={{ borderColor: showFb ? (correct ? '#4ade80' : '#f87171') : isOver ? '#f97316' : '#d1d5db' }}
+                onDragOver={e => { if (!showFb) { e.preventDefault(); setDragOver(p.left) } }}
+                onDragLeave={() => setDragOver(null)}
+                onDrop={e => onDropSlot(e, p.left)}
+                onClick={() => selChip !== null && tapSlot(p.left)}
+              >
+                {placed ? (
+                  <div
+                    draggable={!showFb}
+                    onDragStart={() => !showFb && onDragStartSlot(placed, p.left)}
+                    onClick={e => { e.stopPropagation(); if (!showFb) tapSlot(p.left) }}
+                    className={`flex items-center gap-1.5 w-full h-full px-3 py-2 rounded-xl text-sm font-bold transition-all ${
+                      showFb
+                        ? correct ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-700'
+                        : 'bg-orange-50 text-gray-800 cursor-grab active:cursor-grabbing hover:bg-orange-100'
+                    }`}
+                  >
+                    {!showFb && <span className="text-gray-400 text-xs">⠿</span>}
+                    {placed}
+                  </div>
+                ) : (
+                  <div className={`flex items-center justify-center w-full h-full px-3 py-2 text-xs font-medium rounded-xl ${
+                    selChip ? 'text-orange-400' : 'text-gray-300'
+                  }`}>
+                    {selChip ? '↓ Tap to place' : 'Drop here'}
+                  </div>
+                )}
+              </div>
+
+              {/* Feedback icons */}
               {showFb && (
-                <span className={`text-sm font-bold flex-shrink-0 ${correct ? 'text-green-500' : 'text-red-500'}`}>
+                <span className={`text-base font-bold flex-shrink-0 w-6 text-center ${correct ? 'text-green-500' : 'text-red-500'}`}>
                   {correct ? '✓' : '✗'}
                 </span>
               )}
               {showFb && wrong && (
-                <span className="text-xs text-green-600 font-semibold flex-shrink-0">✔ {p.right}</span>
+                <div className="text-xs text-green-700 font-semibold flex-shrink-0 max-w-[80px] leading-tight">
+                  ✔ {p.right}
+                </div>
               )}
             </div>
           )
         })}
       </div>
 
-      {/* Check button */}
+      {/* ── Check button ── */}
       {!showFb && (
         <button onClick={handleCheck} disabled={!allFilled}
           className={`w-full mt-4 py-3 rounded-2xl text-white font-bold text-sm transition-all ${
             allFilled ? 'bg-orange-500 shadow-lg hover:scale-[1.02]' : 'bg-gray-300 cursor-not-allowed'
           }`}>
-          {allFilled ? 'Check Matches ✓' : `Fill ${remaining} more slot${remaining !== 1 ? 's' : ''} first`}
+          {allFilled ? 'Check Matches ✓' : `Fill ${remaining} more slot${remaining !== 1 ? 's' : ''} to continue`}
         </button>
       )}
     </div>
