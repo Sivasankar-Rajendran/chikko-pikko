@@ -60,7 +60,7 @@ export const LESSON_MAP = {
     maths:    ['Relations & Functions', 'Calculus'],
     english:  ['Writing Skills', 'Literature'],
     physics:  ['Electric Charges & Fields', 'Electrostatic Potential'],
-    chemistry: ['The Solid State', 'Solutions'],
+    chemistry: ['Metallurgy', 'p-Block Elements I', 'p-Block Elements II'],
   },
 }
 

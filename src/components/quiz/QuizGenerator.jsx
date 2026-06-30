@@ -1,6 +1,125 @@
 import { useState, useRef } from 'react'
 import { LESSON_MAP, getQuestions } from '../../data/questions/index'
 
+/* ──────────────────────────────────────────────────────────────────────────
+   Tap-to-match component for q.type === 'match' questions
+   Pair format: [{ left: string, right: string }, ...]
+   Calls onAnswer('__match_correct__') or onAnswer('__match_wrong__')
+────────────────────────────────────────────────────────────────────────── */
+function MatchQuestion({ pairs, onAnswer, showFb }) {
+  const [pool, setPool]       = useState(() => [...pairs.map(p => p.right)].sort(() => Math.random() - 0.5))
+  const [slots, setSlots]     = useState(() => Object.fromEntries(pairs.map(p => [p.left, null])))
+  const [selChip, setSelChip] = useState(null)
+
+  function tapChip(chip) {
+    if (showFb) return
+    setSelChip(prev => prev === chip ? null : chip)
+  }
+
+  function tapSlot(leftItem) {
+    if (showFb) return
+    if (selChip !== null) {
+      const prevChip = slots[leftItem]
+      const newPool = pool.filter(c => c !== selChip)
+      if (prevChip !== null) newPool.push(prevChip)
+      setPool(newPool)
+      setSlots(prev => ({ ...prev, [leftItem]: selChip }))
+      setSelChip(null)
+    } else if (slots[leftItem] !== null) {
+      setPool(prev => [...prev, slots[leftItem]])
+      setSlots(prev => ({ ...prev, [leftItem]: null }))
+    }
+  }
+
+  const allFilled = Object.values(slots).every(v => v !== null)
+  const remaining = Object.values(slots).filter(v => v === null).length
+
+  function handleCheck() {
+    const correct = pairs.every(p => slots[p.left] === p.right)
+    onAnswer(correct ? '__match_correct__' : '__match_wrong__')
+  }
+
+  return (
+    <div className="mb-3">
+      {/* Chip pool */}
+      {!showFb && (
+        <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 mb-4 min-h-[54px]">
+          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
+            Tap a chip to select, then tap a slot to place it
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {pool.map((chip, i) => (
+              <button key={i} onClick={() => tapChip(chip)}
+                className={`px-3 py-1.5 rounded-lg text-sm font-semibold border-2 transition-all ${
+                  selChip === chip
+                    ? 'bg-orange-500 text-white border-orange-500 shadow-md scale-105'
+                    : 'bg-white text-gray-700 border-gray-300 hover:border-orange-400'
+                }`}>
+                {chip}
+              </button>
+            ))}
+            {pool.length === 0 && (
+              <span className="text-xs text-gray-400 italic">All placed — tap Check Matches below</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Pair rows */}
+      <div className="space-y-2">
+        {pairs.map((p, i) => {
+          const placed  = slots[p.left]
+          const correct = showFb && placed === p.right
+          const wrong   = showFb && placed !== p.right
+          return (
+            <div key={i} className={`flex items-center gap-2 p-2.5 rounded-xl border-2 transition-all ${
+              showFb
+                ? correct ? 'border-green-400 bg-green-50' : 'border-red-400 bg-red-50'
+                : 'border-gray-200 bg-white'
+            }`}>
+              <div className="flex-1 text-sm font-semibold text-gray-800 min-w-0">{p.left}</div>
+              <span className="text-gray-300 flex-shrink-0 font-bold">→</span>
+              <button onClick={() => tapSlot(p.left)} disabled={showFb}
+                className={`flex-1 min-h-[36px] rounded-lg border-2 border-dashed px-3 py-1.5 text-sm font-semibold text-center transition-all ${
+                  placed
+                    ? showFb
+                      ? correct ? 'bg-green-100 border-green-400 text-green-800'
+                               : 'bg-red-100   border-red-400   text-red-700'
+                      : selChip !== null
+                        ? 'bg-orange-50 border-orange-400 text-gray-700 cursor-pointer'
+                        : 'bg-white border-gray-300 text-gray-700 hover:border-red-300 cursor-pointer'
+                    : selChip !== null
+                      ? 'bg-orange-50 border-orange-400 text-gray-400 cursor-pointer'
+                      : 'border-gray-200 text-gray-300'
+                }`}>
+                {placed || <span className="text-xs">Drop here</span>}
+              </button>
+              {showFb && (
+                <span className={`text-sm font-bold flex-shrink-0 ${correct ? 'text-green-500' : 'text-red-500'}`}>
+                  {correct ? '✓' : '✗'}
+                </span>
+              )}
+              {showFb && wrong && (
+                <span className="text-xs text-green-600 font-semibold flex-shrink-0">✔ {p.right}</span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Check button */}
+      {!showFb && (
+        <button onClick={handleCheck} disabled={!allFilled}
+          className={`w-full mt-4 py-3 rounded-2xl text-white font-bold text-sm transition-all ${
+            allFilled ? 'bg-orange-500 shadow-lg hover:scale-[1.02]' : 'bg-gray-300 cursor-not-allowed'
+          }`}>
+          {allFilled ? 'Check Matches ✓' : `Fill ${remaining} more slot${remaining !== 1 ? 's' : ''} first`}
+        </button>
+      )}
+    </div>
+  )
+}
+
 const PASS_PCT = 70
 
 const DIFF_META = [
@@ -440,42 +559,50 @@ export default function QuizGenerator({
           </div>
         </div>
 
-        {/* Options */}
-        <div className="space-y-2 mb-3">
-          {q.options.map((opt, i) => {
-            let cls  = 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50'
-            let mark = null
-            if (showFb) {
-              if (opt === q.answer)      { cls = 'border-green-400 bg-green-50 text-green-800'; mark = '✓' }
-              else if (opt === selected) { cls = 'border-red-400 bg-red-50 text-red-700';       mark = '✗' }
-              else                       { cls = 'border-gray-100 bg-gray-50 text-gray-400 opacity-40' }
-            }
-            return (
-              <button key={i} onClick={() => handleAnswer(opt)} disabled={showFb}
-                className={`w-full flex items-center gap-3 px-4 py-2 rounded-xl border-2 font-semibold text-left transition-all ${cls}`}>
-                <span className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0 ${
-                  showFb && opt === q.answer ? 'bg-green-500 text-white'
-                  : showFb && opt === selected && !isCorrect ? 'bg-red-400 text-white'
-                  : 'bg-gray-100 text-gray-500'
-                }`}>
-                  {['A','B','C','D'][i]}
-                </span>
-                <span className="flex-1 text-sm">{opt}</span>
-                {mark && (
-                  <span className={`text-sm flex-shrink-0 ${mark === '✓' ? 'text-green-500' : 'text-red-400'}`}>
-                    {mark}
+        {/* Options (MCQ) or Match pairs */}
+        {q.type === 'match' ? (
+          <MatchQuestion key={q.id} pairs={q.pairs} onAnswer={handleAnswer} showFb={showFb} />
+        ) : (
+          <div className="space-y-2 mb-3">
+            {q.options.map((opt, i) => {
+              let cls  = 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50'
+              let mark = null
+              if (showFb) {
+                if (opt === q.answer)      { cls = 'border-green-400 bg-green-50 text-green-800'; mark = '✓' }
+                else if (opt === selected) { cls = 'border-red-400 bg-red-50 text-red-700';       mark = '✗' }
+                else                       { cls = 'border-gray-100 bg-gray-50 text-gray-400 opacity-40' }
+              }
+              return (
+                <button key={i} onClick={() => handleAnswer(opt)} disabled={showFb}
+                  className={`w-full flex items-center gap-3 px-4 py-2 rounded-xl border-2 font-semibold text-left transition-all ${cls}`}>
+                  <span className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0 ${
+                    showFb && opt === q.answer ? 'bg-green-500 text-white'
+                    : showFb && opt === selected && !isCorrect ? 'bg-red-400 text-white'
+                    : 'bg-gray-100 text-gray-500'
+                  }`}>
+                    {['A','B','C','D'][i]}
                   </span>
-                )}
-              </button>
-            )
-          })}
-        </div>
+                  <span className="flex-1 text-sm">{opt}</span>
+                  {mark && (
+                    <span className={`text-sm flex-shrink-0 ${mark === '✓' ? 'text-green-500' : 'text-red-400'}`}>
+                      {mark}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        )}
 
         {/* Feedback */}
         {showFb && (
           <div className={`rounded-xl px-4 py-3 mb-3 ${isCorrect ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
             <p className={`text-sm font-bold ${isCorrect ? 'text-green-700' : 'text-red-700'}`}>
-              {isCorrect ? '🎉 Correct!' : `❌ Correct answer: ${q.answer}`}
+              {isCorrect
+                ? '🎉 Correct!'
+                : q.type === 'match'
+                  ? '❌ Some pairs were wrong — check the highlighted slots above'
+                  : `❌ Correct answer: ${q.answer}`}
             </p>
           </div>
         )}
