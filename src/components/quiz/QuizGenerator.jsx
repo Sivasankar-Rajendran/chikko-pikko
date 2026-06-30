@@ -216,6 +216,249 @@ function MatchQuestion({ pairs, onAnswer, showFb }) {
   )
 }
 
+/* ──────────────────────────────────────────────────────────────────────────
+   Fill-in-the-blank drag-and-drop component for q.type === 'fillin' questions
+   Format: question string with ___ as blank marker; blanks[] = correct answers;
+           options[] = all draggable chips (including distractors)
+   Calls onAnswer('__fillin_correct__') or onAnswer('__fillin_wrong__')
+────────────────────────────────────────────────────────────────────────── */
+function FillInQuestion({ question, blanks, options, onAnswer, showFb }) {
+  const parts = question.split('___')
+
+  const [slots,   setSlots]   = useState(() => Array(blanks.length).fill(null))
+  const [pool,    setPool]    = useState(() => [...options].sort(() => Math.random() - 0.5))
+  const [selChip, setSelChip] = useState(null)
+  const [dragOver,setDragOver]= useState(null) // slot index being hovered
+  const dragRef = useRef(null) // { chip, from:'pool'|'slot', slotIdx? }
+
+  function onDragStartPool(chip) { dragRef.current = { chip, from: 'pool' }; setSelChip(null) }
+  function onDragStartSlot(chip, idx) { dragRef.current = { chip, from: 'slot', slotIdx: idx }; setSelChip(null) }
+
+  function onDropSlot(e, targetIdx) {
+    e.preventDefault(); setDragOver(null)
+    if (!dragRef.current || showFb) return
+    const { chip, from, slotIdx: srcIdx } = dragRef.current
+    const prevChip = slots[targetIdx]
+    setSlots(prev => {
+      const next = [...prev]; next[targetIdx] = chip
+      if (from === 'slot' && srcIdx !== targetIdx) next[srcIdx] = prevChip
+      return next
+    })
+    if (from === 'pool') {
+      setPool(prev => {
+        const next = prev.filter(c => c !== chip)
+        if (prevChip !== null) next.push(prevChip)
+        return next
+      })
+    }
+    dragRef.current = null
+  }
+
+  function onDropPool(e) {
+    e.preventDefault(); setDragOver(null)
+    if (!dragRef.current || showFb) return
+    const { chip, from, slotIdx: srcIdx } = dragRef.current
+    if (from === 'slot') {
+      setSlots(prev => { const next = [...prev]; next[srcIdx] = null; return next })
+      setPool(prev => [...prev, chip])
+    }
+    dragRef.current = null
+  }
+
+  function tapChip(chip) {
+    if (showFb) return
+    setSelChip(prev => prev === chip ? null : chip)
+  }
+
+  function tapSlot(idx) {
+    if (showFb) return
+    if (selChip !== null) {
+      const prevChip = slots[idx]
+      setPool(prev => { const next = prev.filter(c => c !== selChip); if (prevChip !== null) next.push(prevChip); return next })
+      setSlots(prev => { const next = [...prev]; next[idx] = selChip; return next })
+      setSelChip(null)
+    } else if (slots[idx] !== null) {
+      setPool(prev => [...prev, slots[idx]])
+      setSlots(prev => { const next = [...prev]; next[idx] = null; return next })
+    }
+  }
+
+  const allFilled = slots.every(v => v !== null)
+  const isEquation = question.includes('→')
+
+  function handleCheck() {
+    const correct = blanks.every((ans, i) => slots[i] === ans)
+    onAnswer(correct ? '__fillin_correct__' : '__fillin_wrong__')
+  }
+
+  return (
+    <div className="mb-3 select-none">
+
+      {/* ── Sentence / Equation with inline blank slot(s) ── */}
+      <div className={`border-2 rounded-2xl p-4 mb-4 font-semibold leading-loose ${
+        isEquation
+          ? 'bg-blue-50 border-blue-200 text-gray-900 text-[15px] tracking-wide font-mono'
+          : 'bg-white border-gray-200 text-gray-800 text-base'
+      }`}>
+        {parts.map((part, i) => (
+          <span key={i}>
+            {part}
+            {i < blanks.length && (() => {
+              const placed   = slots[i]
+              const correct  = showFb && placed === blanks[i]
+              const wrong    = showFb && placed !== blanks[i]
+              const isOver   = dragOver === i
+              return (
+                <span
+                  className="inline-flex flex-col items-center justify-center min-w-[110px] mx-1 px-3 py-1 rounded-xl border-2 border-dashed align-middle transition-all cursor-pointer"
+                  style={{
+                    borderColor: showFb ? (correct ? '#4ade80' : '#f87171') : isOver ? '#f97316' : '#d1d5db',
+                    background:  showFb ? (correct ? '#f0fdf4'  : '#fef2f2') : isOver ? '#fff7ed' : '#f9fafb',
+                  }}
+                  onDragOver={e => { if (!showFb) { e.preventDefault(); setDragOver(i) } }}
+                  onDragLeave={() => setDragOver(null)}
+                  onDrop={e => onDropSlot(e, i)}
+                  onClick={() => tapSlot(i)}
+                >
+                  {placed ? (
+                    <>
+                      <span
+                        draggable={!showFb}
+                        onDragStart={() => !showFb && onDragStartSlot(placed, i)}
+                        className={`text-sm font-bold leading-tight text-center ${
+                          showFb ? (correct ? 'text-green-700' : 'text-red-600') : 'text-orange-600'
+                        }`}
+                      >
+                        {placed}
+                      </span>
+                      {wrong && (
+                        <span className="text-[11px] text-green-600 font-bold leading-tight text-center mt-0.5">
+                          ✔ {blanks[i]}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className={`text-xs font-medium ${selChip ? 'text-orange-400' : 'text-gray-300'}`}>
+                      {selChip ? '↓ இங்கே வைக்கவும்' : '______'}
+                    </span>
+                  )}
+                </span>
+              )
+            })()}
+          </span>
+        ))}
+      </div>
+
+      {/* ── Chip pool ── */}
+      {!showFb && (
+        <div
+          onDragOver={e => e.preventDefault()}
+          onDrop={onDropPool}
+          className="bg-gray-50 border-2 border-dashed border-gray-300 rounded-2xl p-3 mb-4 min-h-[62px] transition-colors"
+        >
+          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
+            சரியான வார்த்தையை இழுக்கவும் (drag) அல்லது தொட்டு தேர்ந்தெடுக்கவும் (tap)
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {pool.map((chip, i) => (
+              <div key={i} draggable
+                onDragStart={() => onDragStartPool(chip)}
+                onClick={() => tapChip(chip)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-bold border-2 cursor-grab active:cursor-grabbing transition-all shadow-sm ${
+                  selChip === chip
+                    ? 'bg-orange-500 text-white border-orange-500 shadow-orange-200 shadow-md scale-105'
+                    : 'bg-white text-gray-700 border-gray-200 hover:border-orange-300 hover:shadow-md'
+                }`}>
+                <span className="text-gray-400 text-xs">⠿</span>
+                {chip}
+              </div>
+            ))}
+            {pool.length === 0 && (
+              <span className="text-xs text-gray-400 italic py-1">அனைத்தும் நிரப்பப்பட்டுள்ளன — கீழே சரிபார்க்கவும்</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Check button ── */}
+      {!showFb && (
+        <button onClick={handleCheck} disabled={!allFilled}
+          className={`w-full mt-2 py-3 rounded-2xl text-white font-bold text-sm transition-all ${
+            allFilled ? 'bg-orange-500 shadow-lg hover:scale-[1.02]' : 'bg-gray-300 cursor-not-allowed'
+          }`}>
+          {allFilled ? 'சரிபார் ✓' : 'வெற்றிடத்தை நிரப்பவும்'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Type-in component for q.type === 'typein' questions
+   Student types the chemical formula / answer into a text box.
+   Normalises subscript Unicode (₂→2) and ignores spaces/case for comparison.
+   Calls onAnswer('__typein_correct__') or onAnswer('__typein_wrong__')
+────────────────────────────────────────────────────────────────────────── */
+function TypeInQuestion({ correctAnswer, onAnswer, showFb }) {
+  const [value, setValue] = useState('')
+
+  const norm = s => s.trim()
+    .replace(/₀/g,'0').replace(/₁/g,'1').replace(/₂/g,'2').replace(/₃/g,'3')
+    .replace(/₄/g,'4').replace(/₅/g,'5').replace(/₆/g,'6').replace(/₇/g,'7')
+    .replace(/₈/g,'8').replace(/₉/g,'9')
+    .replace(/·/g,'.').replace(/\s+/g,'')
+    .toLowerCase()
+
+  const isCorrect = showFb && norm(value) === norm(correctAnswer)
+
+  function handleCheck() {
+    if (!value.trim() || showFb) return
+    onAnswer(norm(value) === norm(correctAnswer) ? '__typein_correct__' : '__typein_wrong__')
+  }
+
+  return (
+    <div className="mb-3">
+      <div className="bg-orange-50 border border-orange-200 rounded-xl px-4 py-2.5 mb-3">
+        <p className="text-xs text-orange-700 font-semibold">
+          வேதியியல் சூத்திரத்தை தட்டச்சு செய்யவும். சாதாரண எண்கள் ஏற்கப்படும் — எ.கா: Al2O3.nH2O அல்லது Al₂O₃·nH₂O
+        </p>
+      </div>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={value}
+          onChange={e => { if (!showFb) setValue(e.target.value) }}
+          disabled={showFb}
+          onKeyDown={e => e.key === 'Enter' && handleCheck()}
+          placeholder="சூத்திரம் இங்கே தட்டச்சு செய்யவும்..."
+          className={`flex-1 border-2 rounded-xl px-4 py-3 text-sm font-mono font-semibold outline-none transition-all ${
+            showFb
+              ? isCorrect
+                ? 'border-green-400 bg-green-50 text-green-800'
+                : 'border-red-400 bg-red-50 text-red-700'
+              : 'border-gray-200 bg-white text-gray-800 focus:border-orange-400'
+          }`}
+        />
+        {!showFb && (
+          <button onClick={handleCheck} disabled={!value.trim()}
+            className={`px-5 py-3 rounded-xl text-white font-bold text-sm transition-all ${
+              value.trim() ? 'bg-orange-500 hover:scale-[1.02] shadow-md' : 'bg-gray-300 cursor-not-allowed'
+            }`}>
+            சரிபார்
+          </button>
+        )}
+      </div>
+      {showFb && !isCorrect && (
+        <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 mt-3">
+          <p className="text-sm font-bold text-green-700">
+            ✔ சரியான விடை: <span className="font-mono text-base ml-1">{correctAnswer}</span>
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 const PASS_PCT = 70
 
 const DIFF_META = [
@@ -651,13 +894,25 @@ export default function QuizGenerator({
               style={{ background: dm?.col || '#FF8A00' }}>
               {current + 1}
             </div>
-            <p className="text-gray-800 font-semibold text-sm leading-relaxed pt-1">{q.question}</p>
+            <p className={`font-semibold text-sm leading-relaxed pt-1 ${
+              q.type === 'fillin' && q.question.includes('→') ? 'text-blue-900 font-mono' : 'text-gray-800'
+            }`}>
+              {q.type === 'fillin'
+                ? q.question.includes('→')
+                  ? 'வேதி சமன்பாட்டில் வெற்றிடங்களை நிரப்பவும்:'
+                  : 'வெற்றிடத்தை சரியான வார்த்தையால் நிரப்பவும்:'
+                : q.question}
+            </p>
           </div>
         </div>
 
-        {/* Options (MCQ) or Match pairs */}
+        {/* Options: MCQ | Match | Fill-in | Type-in */}
         {q.type === 'match' ? (
           <MatchQuestion key={q.id} pairs={q.pairs} onAnswer={handleAnswer} showFb={showFb} />
+        ) : q.type === 'fillin' ? (
+          <FillInQuestion key={q.id} question={q.question} blanks={q.blanks} options={q.options} onAnswer={handleAnswer} showFb={showFb} />
+        ) : q.type === 'typein' ? (
+          <TypeInQuestion key={q.id} correctAnswer={q.correctAnswer} onAnswer={handleAnswer} showFb={showFb} />
         ) : (
           <div className="space-y-2 mb-3">
             {q.options.map((opt, i) => {
@@ -695,10 +950,14 @@ export default function QuizGenerator({
           <div className={`rounded-xl px-4 py-3 mb-3 ${isCorrect ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
             <p className={`text-sm font-bold ${isCorrect ? 'text-green-700' : 'text-red-700'}`}>
               {isCorrect
-                ? '🎉 Correct!'
+                ? '🎉 சரியான விடை!'
                 : q.type === 'match'
-                  ? '❌ Some pairs were wrong — check the highlighted slots above'
-                  : `❌ Correct answer: ${q.answer}`}
+                  ? '❌ சில இணைப்புகள் தவறு — மேலே சரியான விடையைப் பாருங்கள்'
+                  : q.type === 'fillin'
+                    ? '❌ சில இடங்கள் தவறு — வெற்றிடத்தில் சரியான விடை காட்டப்பட்டுள்ளது'
+                    : q.type === 'typein'
+                      ? '❌ தவறு — கீழே சரியான சூத்திரத்தைப் பாருங்கள்'
+                      : `❌ Correct answer: ${q.answer}`}
             </p>
           </div>
         )}

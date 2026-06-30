@@ -472,28 +472,22 @@ function IslandsTab({ userClass, quizProgress, goToQuiz, initialSubject = 'Maths
   return (
     <div className="space-y-4">
 
-      {/* Subject toggle + reset */}
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex gap-2 flex-wrap">
-          {subjects.map(s => {
-            const sc = SUBJECT_CONFIG[s] || { label: s, icon: '📚', cols: ['#555'] }
-            return (
-              <button key={s} onClick={() => setSubKey(s)}
-                className={`px-4 py-2 rounded-2xl font-bold text-sm transition-all ${
-                  subKey === s
-                    ? 'text-white shadow-lg'
-                    : 'bg-white text-gray-600 border-2 border-gray-200 hover:border-gray-300'
-                }`}
-                style={subKey === s ? { background: sc.cols[0] } : {}}>
-                {sc.icon} {sc.label}
-              </button>
-            )
-          })}
-        </div>
-        <button onClick={handleReset}
-          className="text-xs text-red-400 hover:text-red-600 border border-red-200 hover:border-red-300 px-3 py-1.5 rounded-xl transition-all bg-white">
-          🔄 Reset Progress
-        </button>
+      {/* Subject toggle */}
+      <div className="flex gap-2 flex-wrap">
+        {subjects.map(s => {
+          const sc = SUBJECT_CONFIG[s] || { label: s, icon: '📚', cols: ['#555'] }
+          return (
+            <button key={s} onClick={() => setSubKey(s)}
+              className={`px-4 py-2 rounded-2xl font-bold text-sm transition-all ${
+                subKey === s
+                  ? 'text-white shadow-lg'
+                  : 'bg-white text-gray-600 border-2 border-gray-200 hover:border-gray-300'
+              }`}
+              style={subKey === s ? { background: sc.cols[0] } : {}}>
+              {sc.icon} {sc.label}
+            </button>
+          )
+        })}
       </div>
 
       {/* Ocean journey card */}
@@ -511,18 +505,21 @@ function IslandsTab({ userClass, quizProgress, goToQuiz, initialSubject = 'Maths
           </div>
         </div>
 
-        {/* Ocean scene */}
-        <div className="relative px-8 py-10 overflow-x-auto"
+        {/* Ocean scene — outer div scrolls, inner div holds the background so it covers full width */}
+        <div className="overflow-x-auto">
+        <div className="relative px-8 py-10"
           style={{
+            minWidth: `${islands.length * ISLE_W + (islands.length - 1) * CONN_W + 64}px`,
             backgroundImage: "url('/ocean-bg-new.jpg')",
             backgroundSize: 'cover',
             backgroundPosition: 'center 60%',
             backgroundRepeat: 'no-repeat',
+            backgroundColor: '#1565C0',
           }}>
           {/* Dark overlay for contrast */}
           <div className="absolute inset-0 bg-black/20 pointer-events-none" style={{ zIndex: 0 }} />
           <div className="relative flex items-end"
-            style={{ minWidth: `${islands.length * ISLE_W + (islands.length - 1) * CONN_W}px`, gap: 0, zIndex: 2 }}>
+            style={{ gap: 0, zIndex: 2 }}>
 
             {islands.map((island, idx) => {
               const st          = idx < islands.length - 1 ? boatStatus(idx) : null
@@ -678,6 +675,7 @@ function IslandsTab({ userClass, quizProgress, goToQuiz, initialSubject = 'Maths
             })}
           </div>
         </div>
+        </div>{/* end overflow-x-auto wrapper */}
 
         {/* Footer legend */}
         <div className="bg-white px-6 py-3 border-t border-gray-100 flex flex-wrap items-center gap-4">

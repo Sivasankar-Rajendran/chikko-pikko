@@ -123,14 +123,105 @@ function Sidebar({ tab, setTab, user, onLogout }) {
 }
 
 /* ── Dashboard Tab ───────────────────────────────────────────────────────── */
-function DashboardTab({ students = [] }) {
-  const total   = students.length
-  const present = students.filter(s => s.attendance > 70).length
+function DashboardTab({ students = [], allProgress = {}, userClass = 1 }) {
+  const today          = new Date().toISOString().slice(0, 10)
+  const total          = students.length
+  const classSubjects  = Object.keys(LESSON_MAP[userClass] || { maths: [], english: [] })
+
+  // Strip Firebase metadata fields from a progress doc
+  function stripMeta(raw) {
+    const { __coins: _c, __streak: _s, __streakDate: _d, __badges: _b, ...prog } = raw || {}
+    return prog
+  }
+
+  // Compute avg pct for one student + subject from real progress
+  function subjAvgPct(s, subj, progData) {
+    const lessons  = LESSON_MAP[userClass]?.[subj] || []
+    if (!lessons.length) return 0
+    const hasData  = Object.keys(progData).length > 0
+    const fallback = subj === 'maths' ? s.mathScore : subj === 'english' ? s.engScore : 0
+    const pcts = lessons.map((lesson, i) => {
+      const real = hasData ? getRealLessonProgress(progData, userClass, subj, lesson) : null
+      return (real ?? getLessonProgress(fallback, i, lessons.length)).pct
+    })
+    return Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length)
+  }
+
+  // One-pass per-student enrichment
+  const studentData = students.map(s => {
+    const raw         = allProgress[s.id] || {}
+    const progData    = stripMeta(raw)
+    const subjPcts    = Object.fromEntries(classSubjects.map(subj => [subj, subjAvgPct(s, subj, progData)]))
+    const overallPct  = classSubjects.length
+      ? Math.round(classSubjects.reduce((sum, subj) => sum + subjPcts[subj], 0) / classSubjects.length)
+      : 0
+    const weakestSubj = classSubjects.length
+      ? classSubjects.reduce((a, b) => subjPcts[a] <= subjPcts[b] ? a : b)
+      : 'maths'
+    const isActiveToday = raw.__streakDate === today
+    const streak        = raw.__streak || 0
+    const streakDate    = raw.__streakDate || ''
+    return { ...s, subjPcts, overallPct, weakestSubj, isActiveToday, streak, streakDate }
+  })
+
+  const present = studentData.filter(s => s.isActiveToday).length
   const absent  = total - present
-  const mathAvg = total > 0 ? Math.round(students.reduce((a, s) => a + s.mathScore, 0) / total) : 0
-  const engAvg  = total > 0 ? Math.round(students.reduce((a, s) => a + s.engScore,  0) / total) : 0
-  const attn    = students.filter(s => s.status === 'attention')
-  const topImp  = [...students].sort((a, b) => (b.mathScore + b.engScore) - (a.mathScore + a.engScore)).slice(0, 3)
+
+  // Class Performance: avg per subject across all students
+  const subjAvgs = classSubjects.map(subj => {
+    const cfg = SUBJ_CFG[subj] || { label: subj, col: '#555' }
+    const avg = total ? Math.round(studentData.reduce((sum, s) => sum + s.subjPcts[subj], 0) / total) : 0
+    return { subj, label: `${cfg.label} Avg`, color: cfg.col, value: avg }
+  })
+
+  // Students Needing Attention: overall < 40% OR never active
+  const attn = studentData
+    .filter(s => s.overallPct < 40 || !s.streakDate)
+    .sort((a, b) => a.overallPct - b.overallPct)
+    .slice(0, 4)
+
+  // Top Improvers: highest overall completion %
+  const topImp = [...studentData]
+    .sort((a, b) => b.overallPct - a.overallPct)
+    .slice(0, 3)
+
+  // Weakest Topics: per-lesson avg pct across students, sort asc
+  const lessonStats = []
+  classSubjects.forEach(subj => {
+    const cfg     = SUBJ_CFG[subj] || { label: subj, col: '#E53935' }
+    const lessons = LESSON_MAP[userClass]?.[subj] || []
+    lessons.forEach((lesson, idx) => {
+      const pcts   = studentData.map(s => {
+        const raw      = allProgress[s.id] || {}
+        const progData = stripMeta(raw)
+        const hasData  = Object.keys(progData).length > 0
+        const fallback = subj === 'maths' ? s.mathScore : subj === 'english' ? s.engScore : 0
+        const real     = hasData ? getRealLessonProgress(progData, userClass, subj, lesson) : null
+        return (real ?? getLessonProgress(fallback, idx, lessons.length)).pct
+      })
+      const avgPct  = pcts.length ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length) : 0
+      const weakPct = pcts.length ? Math.round(pcts.filter(p => p < 50).length / pcts.length * 100) : 0
+      lessonStats.push({ lesson, subj, label: cfg.label, col: cfg.col, avgPct, weakPct })
+    })
+  })
+  const weakestTopics = [...lessonStats].sort((a, b) => a.avgPct - b.avgPct).slice(0, 4)
+
+  // Weekly activity: infer from __streak + __streakDate
+  const weekDays = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(); d.setDate(d.getDate() - (6 - i))
+    return { date: d.toISOString().slice(0, 10), label: d.toLocaleDateString('en', { weekday: 'short' }) }
+  })
+  const weekActivity = weekDays.map(({ date, label }) => {
+    const count = students.filter(s => {
+      const prog = allProgress[s.id]
+      if (!prog?.__streakDate) return false
+      const lastMs = new Date(prog.__streakDate).getTime()
+      const dayMs  = new Date(date).getTime()
+      const diff   = Math.round((lastMs - dayMs) / 86400000)
+      return diff >= 0 && diff < (prog.__streak || 0)
+    }).length
+    return { day: label, students: count }
+  })
 
   return (
     <div className="space-y-5">
@@ -140,7 +231,7 @@ function DashboardTab({ students = [] }) {
           { icon: '👥', value: total,   label: 'Total Students', color: 'text-brand-blue',   iconBg: 'bg-blue-100'   },
           { icon: '✅', value: present, label: 'Present Today',  color: 'text-brand-green',  iconBg: 'bg-green-100'  },
           { icon: '❌', value: absent,  label: 'Absent Today',   color: 'text-red-500',      iconBg: 'bg-red-100'    },
-          { icon: '📊', value: `${Math.round((present/total)*100)}%`, label: 'Average Activity', color: 'text-brand-purple', iconBg: 'bg-purple-100' },
+          { icon: '📊', value: `${total > 0 ? Math.round((present/total)*100) : 0}%`, label: 'Attendance Rate', color: 'text-brand-purple', iconBg: 'bg-purple-100' },
         ].map((s, i) => (
           <div key={i} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-3">
             <div className={`w-11 h-11 rounded-xl ${s.iconBg} flex items-center justify-center text-2xl flex-shrink-0`}>{s.icon}</div>
@@ -157,36 +248,35 @@ function DashboardTab({ students = [] }) {
         {/* Students Needing Attention */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
           <h3 className="font-display text-sm text-gray-700 mb-3">Students Needing Attention</h3>
-          <div className="space-y-2.5">
-            {attn.map(s => (
-              <div key={s.id} className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-600 flex-shrink-0">
-                  {s.name.split(' ').map(n => n[0]).join('')}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-bold text-gray-700 truncate">{s.name}</div>
-                  <div className="text-[10px] text-gray-400 truncate">
-                    {s.mathScore < 50 ? 'Struggling in Maths' : s.engScore < 50 ? 'Struggling in English' : `Not Active for ${s.lastActive}`}
+          {attn.length === 0 ? (
+            <p className="text-xs text-green-600 font-semibold py-2">🎉 All students are on track!</p>
+          ) : (
+            <div className="space-y-2.5">
+              {attn.map(s => {
+                const cfg     = SUBJ_CFG[s.weakestSubj] || { label: s.weakestSubj }
+                const reason  = s.overallPct === 0 && !s.streakDate
+                  ? 'Not started yet'
+                  : s.overallPct < 40
+                    ? `Struggling in ${cfg.label}`
+                    : 'Inactive — not started'
+                const isHigh  = s.overallPct < 20 || !s.streakDate
+                return (
+                  <div key={s.id} className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-full bg-red-50 flex items-center justify-center text-xs font-bold text-red-600 flex-shrink-0">
+                      {s.name.split(' ').map(n => n[0]).join('')}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-bold text-gray-700 truncate">{s.name}</div>
+                      <div className="text-[10px] text-gray-400 truncate">{reason} · {s.overallPct}% overall</div>
+                    </div>
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${
+                      isHigh ? 'bg-red-100 text-red-600' : 'bg-yellow-100 text-yellow-700'
+                    }`}>{isHigh ? 'High' : 'Medium'}</span>
                   </div>
-                </div>
-                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${
-                  s.status === 'attention' ? 'bg-red-100 text-red-600' : 'bg-yellow-100 text-yellow-700'
-                }`}>{s.attendance < 70 ? 'High' : 'Medium'}</span>
-              </div>
-            ))}
-            {students.filter(s => s.attendance < 80 && s.status !== 'attention').slice(0,1).map(s => (
-              <div key={s.id} className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-600 flex-shrink-0">
-                  {s.name.split(' ').map(n => n[0]).join('')}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-bold text-gray-700 truncate">{s.name}</div>
-                  <div className="text-[10px] text-gray-400">Not Active for 5 Days</div>
-                </div>
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-yellow-100 text-yellow-700">High</span>
-              </div>
-            ))}
-          </div>
+                )
+              })}
+            </div>
+          )}
           <button className="w-full mt-3 py-1.5 rounded-xl text-[10px] font-bold text-brand-blue border border-blue-100 bg-blue-50 hover:bg-blue-100 transition-colors">
             View All ({attn.length}) →
           </button>
@@ -195,20 +285,16 @@ function DashboardTab({ students = [] }) {
         {/* Class Performance */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
           <h3 className="font-display text-sm text-gray-700 mb-3">Class Performance</h3>
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { label: 'Maths Average', value: mathAvg, color: '#FF8A00', trend: '+6%' },
-              { label: 'English Average', value: engAvg, color: '#1E88E5', trend: '+4%' },
-            ].map((m, i) => (
+          <div className={`grid gap-3 ${subjAvgs.length > 2 ? 'grid-cols-2' : 'grid-cols-2'}`}>
+            {subjAvgs.map((m, i) => (
               <div key={i} className="text-center">
-                <div className="text-sm font-semibold text-gray-500 mb-2">{m.label}</div>
+                <div className="text-[11px] font-semibold text-gray-500 mb-2">{m.label}</div>
                 <div className="relative inline-block">
-                  <Ring value={m.value} color={m.color} size={80} sw={7} />
+                  <Ring value={m.value} color={m.color} size={72} strokeWidth={7} />
                   <div className="absolute inset-0 flex items-center justify-center">
-                    <span className="font-display text-base" style={{ color: m.color }}>{m.value}%</span>
+                    <span className="font-display text-sm" style={{ color: m.color }}>{m.value}%</span>
                   </div>
                 </div>
-                <div className="text-[10px] text-green-500 font-bold mt-1">{m.trend} vs last month</div>
               </div>
             ))}
           </div>
@@ -218,17 +304,25 @@ function DashboardTab({ students = [] }) {
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
           <h3 className="font-display text-sm text-gray-700 mb-3">Weakest Topics</h3>
           <div className="space-y-3">
-            {WEAKEST_TOPICS.map((t, i) => (
+            {weakestTopics.length === 0 ? (
+              <p className="text-xs text-gray-400">No topic data yet.</p>
+            ) : weakestTopics.map((t, i) => (
               <div key={i} className="flex items-start gap-2">
                 <div className={`w-5 h-5 rounded-full flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0 mt-0.5 ${
-                  i === 0 ? 'bg-red-500' : i === 1 ? 'bg-orange-500' : 'bg-yellow-500'
+                  i === 0 ? 'bg-red-500' : i === 1 ? 'bg-orange-500' : i === 2 ? 'bg-yellow-500' : 'bg-gray-400'
                 }`}>{i + 1}</div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-xs font-bold text-gray-700">{t.topic}</div>
-                  <div className="text-[10px] text-red-500 font-semibold">{t.percent}% students weak</div>
-                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden mt-1">
-                    <div className="h-1.5 bg-red-400 rounded-full" style={{ width: `${t.percent}%` }} />
+                  <div className="text-xs font-bold text-gray-700 truncate">{t.lesson}</div>
+                  <div className="text-[10px] font-semibold mt-0.5" style={{ color: t.col }}>{t.label}</div>
+                  <div className="flex items-center gap-2 mt-1">
+                    <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-1.5 rounded-full" style={{ width: `${t.avgPct}%`, background: t.col }} />
+                    </div>
+                    <span className="text-[10px] text-gray-500 font-semibold flex-shrink-0">{t.avgPct}% avg</span>
                   </div>
+                  {t.weakPct > 0 && (
+                    <div className="text-[9px] text-red-400 font-semibold mt-0.5">{t.weakPct}% students below 50%</div>
+                  )}
                 </div>
               </div>
             ))}
@@ -243,34 +337,47 @@ function DashboardTab({ students = [] }) {
       <div className="grid grid-cols-3 gap-4">
         {/* Top Improvers */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-          <h3 className="font-display text-sm text-gray-700 mb-3">Top Improvers</h3>
-          <div className="space-y-3">
-            {topImp.map((s, i) => (
-              <div key={s.id} className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-indigo-400 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
-                  {s.name.split(' ').map(n => n[0]).join('')}
-                </div>
-                <div className="flex-1 text-xs font-bold text-gray-700 truncate">{s.name}</div>
-                <span className="text-xs font-bold text-green-500 flex-shrink-0">+{Math.max(s.mathScore - 70, s.engScore - 65)}%</span>
-              </div>
-            ))}
-          </div>
+          <h3 className="font-display text-sm text-gray-700 mb-3">Top Performers</h3>
+          {topImp.length === 0 ? (
+            <p className="text-xs text-gray-400">No activity yet.</p>
+          ) : (
+            <div className="space-y-3">
+              {topImp.map((s, i) => {
+                const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'
+                return (
+                  <div key={s.id} className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-indigo-400 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
+                      {s.name.split(' ').map(n => n[0]).join('')}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-bold text-gray-700 truncate">{s.name}</div>
+                      <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden mt-1">
+                        <div className="h-1.5 bg-brand-green rounded-full" style={{ width: `${s.overallPct}%` }} />
+                      </div>
+                    </div>
+                    <span className="text-xs font-bold text-green-600 flex-shrink-0">{medal} {s.overallPct}%</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
 
         {/* Class Activity Chart */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
           <h3 className="font-display text-sm text-gray-700 mb-2">Class Activity (This Week)</h3>
           <ResponsiveContainer width="100%" height={110}>
-            <BarChart data={WEEKLY_ACTIVITY} barSize={14}>
+            <BarChart data={weekActivity} barSize={14}>
               <XAxis dataKey="day" tick={{ fontSize: 9, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-              <YAxis hide />
-              <Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+              <YAxis hide domain={[0, Math.max(total, 1)]} />
+              <Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{ fontSize: 11, borderRadius: 8 }}
+                formatter={(v) => [`${v} student${v !== 1 ? 's' : ''}`, 'Active']} />
               <Bar dataKey="students" fill="#28B463" radius={[4,4,0,0]} />
             </BarChart>
           </ResponsiveContainer>
           <div className="flex items-center gap-1.5 mt-1">
             <div className="w-2.5 h-2.5 rounded-full bg-brand-green" />
-            <span className="text-[10px] text-gray-400">Active Students</span>
+            <span className="text-[10px] text-gray-400">Active Students per Day</span>
           </div>
         </div>
 
@@ -855,14 +962,16 @@ export default function TeacherDashboard() {
 
   const [allStudents,   setAllStudents]   = useState(ALL_STUDENTS)
   const [assignments,   setAssignments]   = useState(DEFAULT_CLASS_ASSIGNMENTS)
+  const [allProgress,   setAllProgress]   = useState({})
   const [dataLoading,   setDataLoading]   = useState(true)
 
-  // Load students + assignments from Firestore
+  // Load students, assignments and progress from Firestore
   useEffect(() => {
-    Promise.all([getAllStudentsFS(), getClassAssignmentsFS()])
-      .then(([fsStudents, fsAssign]) => {
+    Promise.all([getAllStudentsFS(), getClassAssignmentsFS(), getAllProgressFS()])
+      .then(([fsStudents, fsAssign, fsProgress]) => {
         if (fsStudents.length) setAllStudents(fsStudents)
         if (fsAssign)          setAssignments(fsAssign)
+        setAllProgress(fsProgress)
       })
       .catch(() => {})
       .finally(() => setDataLoading(false))
@@ -886,11 +995,11 @@ export default function TeacherDashboard() {
 
   const renderTab = () => {
     switch (tab) {
-      case 'Dashboard':   return <DashboardTab students={classStudents} />
+      case 'Dashboard':   return <DashboardTab students={classStudents} allProgress={allProgress} userClass={parseInt(selectedClass.split('|')[0]) || 1} />
       case 'Students':    return <StudentsTab students={classStudents} userClass={parseInt(selectedClass.split('|')[0]) || 1} />
       case 'Assignments': return <AssignmentsTab />
       case 'Reports':     return <ReportsTab />
-      default:            return <DashboardTab students={classStudents} />
+      default:            return <DashboardTab students={classStudents} allProgress={allProgress} userClass={parseInt(selectedClass.split('|')[0]) || 1} />
     }
   }
 
